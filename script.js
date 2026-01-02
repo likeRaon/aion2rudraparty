@@ -1,32 +1,22 @@
-// 전역 변수
 const API_BASE_URL = 'https://api.aon2.info/api/v1/aion2';
-const PROXY_URL = ''; // 필요시 CORS 프록시 사용
+const PROXY_URL = '';
 
-// 상태 관리
-let currentTab = 'party'; // party, member, completed
+let currentTab = 'party';
 let posts = [];
 let currentUser = null;
 let currentEditingPostId = null;
 
-// DOM 요소
 const elements = {
-    // 게시판
     postList: document.getElementById('postList'),
     writeBtn: document.getElementById('writeBtn'),
     tabBtns: document.querySelectorAll('.tab-btn'),
     roleFilter: document.getElementById('roleFilter'),
-    
-    // 모달 공통
     modals: document.querySelectorAll('.modal'),
-    
-    // 글쓰기 모달
     writeModal: document.getElementById('writeModal'),
     writeCloseBtn: document.querySelector('.write-close'),
     postForm: document.getElementById('postForm'),
     postRoleCheckboxes: document.querySelectorAll('input[name="postRole"]'),
     postMyDps: document.getElementById('postMyDps'),
-    
-    // 로그인 모달
     authModal: document.getElementById('authModal'),
     authCloseBtn: document.querySelector('.auth-close'),
     authForm: document.getElementById('authForm'),
@@ -35,8 +25,6 @@ const elements = {
     userNickname: document.getElementById('userNickname'),
     logoutBtn: document.getElementById('logoutBtn'),
     authNickname: document.getElementById('authNickname'),
-
-    // 파티 관리 모달
     manageModal: document.getElementById('manageModal'),
     manageCloseBtn: document.querySelector('.manage-close'),
     managePostInfo: document.getElementById('managePostInfo'),
@@ -47,8 +35,6 @@ const elements = {
     addMemberBtn: document.getElementById('addMemberBtn'),
     partyMemberList: document.getElementById('partyMemberList'),
     deletePostBtn: document.getElementById('deletePostBtn'),
-
-    // 상세 보기 모달
     detailModal: document.getElementById('detailModal'),
     detailCloseBtn: document.querySelector('.detail-close'),
     detailRoles: document.getElementById('detailRoles'),
@@ -57,8 +43,6 @@ const elements = {
     detailTime: document.getElementById('detailTime'),
     detailContent: document.getElementById('detailContent'),
     detailLink: document.getElementById('detailLink'),
-    
-    // 상세 보기 - 작성자 및 파티원
     detailAuthorProfile: document.getElementById('detailAuthorProfile'),
     detailAuthorAvatar: document.getElementById('detailAuthorAvatar'),
     detailAuthorName: document.getElementById('detailAuthorName'),
@@ -66,7 +50,6 @@ const elements = {
     detailAuthorItemLevel: document.getElementById('detailAuthorItemLevel')
 };
 
-// 초기화
 document.addEventListener('DOMContentLoaded', () => {
     loadUser();
     loadPosts();
@@ -74,7 +57,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function setupEventListeners() {
-    // --- 탭 전환 ---
     elements.tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             elements.tabBtns.forEach(b => b.classList.remove('active'));
@@ -84,10 +66,8 @@ function setupEventListeners() {
         });
     });
 
-    // --- 필터 ---
     elements.roleFilter.addEventListener('change', renderPosts);
 
-    // --- 로그인/로그아웃 ---
     elements.loginBtn.addEventListener('click', () => {
         elements.authModal.classList.remove('hidden');
     });
@@ -104,7 +84,6 @@ function setupEventListeners() {
 
     elements.logoutBtn.addEventListener('click', logout);
 
-    // --- 글쓰기 ---
     elements.writeBtn.addEventListener('click', () => {
         if (!currentUser) {
             alert('닉네임을 먼저 설정해주세요 (로그인).');
@@ -123,7 +102,6 @@ function setupEventListeners() {
         elements.writeModal.classList.add('hidden');
     });
 
-    // 직업 체크박스 로직
     const roleAny = document.getElementById('role_any');
     const otherRoles = Array.from(elements.postRoleCheckboxes).filter(cb => cb.value !== '무관');
 
@@ -141,7 +119,6 @@ function setupEventListeners() {
 
     elements.postForm.addEventListener('submit', handlePostSubmit);
 
-    // --- 파티 관리 ---
     elements.manageCloseBtn.addEventListener('click', () => {
         elements.manageModal.classList.add('hidden');
         currentEditingPostId = null;
@@ -153,12 +130,10 @@ function setupEventListeners() {
     elements.addMemberBtn.addEventListener('click', addPartyMember);
     elements.deletePostBtn.addEventListener('click', deletePost);
 
-    // --- 상세 보기 ---
     elements.detailCloseBtn.addEventListener('click', () => {
         elements.detailModal.classList.add('hidden');
     });
 
-    // 모달 바깥 클릭 시 닫기
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal')) {
             e.target.classList.add('hidden');
@@ -166,7 +141,6 @@ function setupEventListeners() {
     });
 }
 
-// --- 사용자 관리 ---
 function loadUser() {
     const savedUser = localStorage.getItem('rudra_user');
     if (savedUser) {
@@ -182,8 +156,8 @@ function login(nickname) {
                 name: data.name,
                 class: data.class,
                 level: data.level,
-                itemLevel: data.item_level, // API 값
-                dps: 0, // 기본값
+                itemLevel: data.item_level,
+                dps: data.dps,
                 avatar: data.profile_img,
                 verified: true
             };
@@ -231,7 +205,6 @@ function updateUserUI() {
     }
 }
 
-// --- 게시글 처리 ---
 function handlePostSubmit(e) {
     e.preventDefault();
     
@@ -342,9 +315,8 @@ function renderPosts() {
             ? '<span class="party-status status-full">모집완료</span>' 
             : '<span class="party-status status-recruiting">모집중</span>';
 
-        // DPS 및 아이템 레벨 표시
-        const dpsVal = (post.author.dps || 0).toLocaleString();
-        const itemLevelVal = (post.author.itemLevel || 0).toLocaleString();
+        const dpsDisplay = (post.author.dps || 0).toLocaleString();
+        const itemLevelDisplay = (post.author.itemLevel || 0).toLocaleString();
         
         const card = document.createElement('div');
         card.className = `post-card type-${post.type}`;
@@ -405,8 +377,8 @@ function renderPosts() {
                             <div class="author-name">${post.author.name}</div>
                             <div style="font-size: 0.75rem; color: #a1a1aa;">
                                 ${post.author.class} 
-                                <span class="dps-tag">DPS ${dpsVal}</span>
-                                <span style="font-size:0.7rem; color:#666; margin-left:4px;">(Lv.${itemLevelVal})</span>
+                                <span class="dps-tag">DPS ${dpsDisplay}</span>
+                                <span style="font-size:0.7rem; color:#666; margin-left:4px;">(Lv.${itemLevelDisplay})</span>
                             </div>
                         </div>
                     </div>
@@ -419,14 +391,12 @@ function renderPosts() {
     });
 }
 
-// --- 상세 보기 ---
 function showPostDetail(postId) {
     const post = posts.find(p => p.id === postId);
     if (!post) return;
 
     elements.detailModal.classList.remove('hidden');
     
-    // 기본 정보
     const roles = Array.isArray(post.roles) ? post.roles : [post.role];
     elements.detailRoles.innerHTML = roles.map(r => `<span class="role-badge">${r}</span>`).join(' ');
     elements.detailTitle.textContent = post.title;
@@ -434,7 +404,6 @@ function showPostDetail(postId) {
     elements.detailTime.textContent = new Date(post.createdAt).toLocaleString();
     elements.detailContent.textContent = post.content;
     
-    // 링크 버튼
     if (post.link) {
         elements.detailLink.href = post.link;
         elements.detailLink.classList.remove('hidden');
@@ -484,7 +453,6 @@ function openAtulPage(nickname) {
     }
 }
 
-// --- 관리 ---
 window.checkPasswordAndManage = function(postId) {
     const post = posts.find(p => p.id === postId);
     if (!post) return;
@@ -539,11 +507,12 @@ async function addPartyMember() {
             class: cls,
             isLeader: false,
             dps: 0, 
-            itemLevel: charData ? charData.item_level : 0, 
+            itemLevel: charData ? charData.item_level : 0,
             avatar: charData ? charData.profile_img : null 
         };
 
         if (!post.members) post.members = [];
+        
         post.members.push(newMember);
         savePosts();
         renderPartyMembers(); 
@@ -594,7 +563,6 @@ function deletePost() {
     }
 }
 
-// --- API ---
 async function fetchCharacterData(nickname) {
     try {
         const searchUrl = `${PROXY_URL}https://api.aon2.info/api/v1/aion2/rankings/item-level/search?characterName=${encodeURIComponent(nickname)}&raceId=2&serverId=2002`;
@@ -612,11 +580,17 @@ async function fetchCharacterData(nickname) {
         
         const data = detailJson.data;
 
+        let dps = 0;
+        if (data.combatPoint) dps = data.combatPoint;
+        else if (data.stats && data.stats.combatPower) dps = data.stats.combatPower;
+        else dps = data.totalItemLevel;
+
         return {
             name: data.characterName,
             level: data.level,
             class: data.classInfo ? data.classInfo.className : '알 수 없음',
-            item_level: data.totalItemLevel, // API 값
+            item_level: data.totalItemLevel, 
+            dps: dps,
             profile_img: data.profileImageUrl,
             server: '지켈',
             charId: charId 
