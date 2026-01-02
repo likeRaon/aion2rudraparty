@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>아이온2 루드라(성역) 파티 매칭</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 헤더 -->
+        <header>
+            <div class="logo">
+                <i class="fa-solid fa-dragon"></i>
+                <h1>루드라<span>(성역)</span> 파티 매칭</h1>
+            </div>
+            <div class="user-menu">
+                <button id="loginBtn" class="btn-outline">로그인</button>
+                <div id="userInfo" class="hidden" style="display: flex; align-items: center; gap: 10px;">
+                    <span id="userNickname" style="font-weight: 700;"></span>
+                    <button id="logoutBtn" class="btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">로그아웃</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 메인 컨텐츠 -->
+        <main>
+            <!-- 게시판 섹션 -->
+            <section class="board-section">
+                <div class="board-tabs">
+                    <button class="tab-btn active" data-tab="party">
+                        <i class="fa-solid fa-users"></i> 파티원 구해요.
+                        <span class="sub-text">(파티원이 필요해요.)</span>
+                    </button>
+                    <button class="tab-btn" data-tab="member">
+                        <i class="fa-solid fa-user-plus"></i> 파티 구해요.
+                        <span class="sub-text">(파티에 들어가고 싶어요)</span>
+                    </button>
+                    <button class="tab-btn" data-tab="completed">
+                        <i class="fa-solid fa-check-circle"></i> 매칭 완료.
+                        <span class="sub-text">(진행 중인 파티 보기)</span>
+                    </button>
+                </div>
+
+                <div class="board-actions">
+                    <div class="filter-group">
+                        <select id="roleFilter">
+                            <option value="all">모든 직업 보기</option>
+                            <option value="tank">탱커 (수호성/검성)</option>
+                            <option value="dps">딜러 (살성/궁성/마도성/정령성)</option>
+                            <option value="healer">힐러 (치유성/호법성)</option>
+                        </select>
+                    </div>
+                    <button id="writeBtn" class="btn-primary"><i class="fa-solid fa-pen"></i> 글쓰기</button>
+                </div>
+
+                <!-- 게시글 리스트 -->
+                <div id="postList" class="post-grid">
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>© 2026 Aion2 전투&명가 레기온 루드라 파티 매칭. unofficial fan site.</p>
+            <p>GitHub Pages로 호스팅되어 24시간 무료로 운영됩니다.</p>
+        </footer>
+    </div>
+
+    <!-- 로그인 모달 -->
+    <div id="authModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>로그인 (닉네임 설정)</h3>
+                <button class="close-btn auth-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 15px; color: var(--text-sub); font-size: 0.9rem;">
+                    간편하게 닉네임을 설정하고 서비스를 이용하세요.<br>
+                    설정한 닉네임은 브라우저에 저장됩니다.
+                </p>
+                <form id="authForm">
+                    <div class="form-group">
+                        <label>닉네임</label>
+                        <input type="text" id="authNickname" required placeholder="게임 닉네임 입력">
+                    </div>
+                    <button type="submit" class="btn-primary full-width">설정하기</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 글쓰기 모달 -->
+    <div id="writeModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">파티 모집글 작성</h3>
+                <button class="close-btn write-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="postForm">
+                    <div class="form-group">
+                        <label>모집/지원 직업 (다중 선택 가능)</label>
+                        <div class="checkbox-group">
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="무관" id="role_any">
+                                <label for="role_any">무관</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="수호성" id="role_tempular">
+                                <label for="role_tempular">수호성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="검성" id="role_gladiator">
+                                <label for="role_gladiator">검성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="살성" id="role_assassin">
+                                <label for="role_assassin">살성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="궁성" id="role_ranger">
+                                <label for="role_ranger">궁성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="마도성" id="role_sorcerer">
+                                <label for="role_sorcerer">마도성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="정령성" id="role_spirit">
+                                <label for="role_spirit">정령성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="치유성" id="role_cleric">
+                                <label for="role_cleric">치유성</label>
+                            </div>
+                            <div class="checkbox-item">
+                                <input type="checkbox" name="postRole" value="호법성" id="role_chanter">
+                                <label for="role_chanter">호법성</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>제목</label>
+                        <input type="text" id="postTitle" required placeholder="예: 루드라 숙련 팟 힐러 모십니다">
+                    </div>
+
+                    <div class="form-group">
+                        <label>내용</label>
+                        <textarea id="postContent" required placeholder="접속 가능 시간 등을 자유롭게 적어주세요."></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>오픈채팅/디스코드 링크 (선택)</label>
+                        <input type="url" id="postLink" placeholder="https://open.kakao.com/...">
+                    </div>
+
+                    <div class="form-group">
+                        <label>나의 전투력 (DPS)</label>
+                        <input type="number" id="postMyDps" placeholder="예: 28500 (숫자만 입력)" style="font-family: 'Cafe24SsurroundAir';">
+                    </div>
+
+                    <div class="form-group">
+                        <label>게시글 비밀번호 (필수)</label>
+                        <input type="password" id="postPassword" required placeholder="글 수정/삭제 시 필요합니다 (4자리 이상)" minlength="4">
+                        <p style="font-size: 0.8rem; color: var(--danger); margin-top: 5px;">* 사칭 방지를 위해 꼭 설정해주세요.</p>
+                    </div>
+
+                    <button type="submit" class="btn-primary full-width">등록하기</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 파티 관리 모달 -->
+    <div id="manageModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>내 파티 관리</h3>
+                <button class="close-btn manage-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="managePostInfo" style="margin-bottom: 20px;">
+                </div>
+
+                <div class="form-group">
+                    <label>상태 변경</label>
+                    <div class="manage-btn-group">
+                        <button id="btnStatusRecruiting" class="btn-success">모집중</button>
+                        <button id="btnStatusFull" class="btn-danger">모집완료</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>파티원 관리</label>
+                    <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                        <input type="text" id="newMemberName" placeholder="파티원 닉네임" style="flex: 2;">
+                        <select id="newMemberClass" style="flex: 1.5;">
+                            <option value="검성">검성</option>
+                            <option value="수호성">수호성</option>
+                            <option value="살성">살성</option>
+                            <option value="궁성">궁성</option>
+                            <option value="마도성">마도성</option>
+                            <option value="정령성">정령성</option>
+                            <option value="치유성">치유성</option>
+                            <option value="호법성">호법성</option>
+                        </select>
+                        <button id="addMemberBtn" class="btn-small">추가</button>
+                    </div>
+                    <div id="partyMemberList" class="member-list">
+                        <!-- 멤버 리스트 -->
+                    </div>
+                </div>
+
+                <button id="deletePostBtn" class="btn-danger full-width" style="margin-top: 20px; border-color: var(--border); color: var(--text-sub);">게시글 삭제</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 상세 보기 모달 -->
+    <div id="detailModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>게시글 상세 정보</h3>
+                <button class="close-btn detail-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="detail-header">
+                    <div style="flex:1;">
+                        <div id="detailRoles" style="margin-bottom:8px;"></div>
+                        <h4 id="detailTitle" class="detail-title">제목</h4>
+                        <div class="detail-meta">
+                            <span id="detailAuthor">작성자</span> | 
+                            <span id="detailTime">시간</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="detailContent" class="detail-content">내용</div>
+                
+                <div class="form-group">
+                    <label>작성자 정보</label>
+                    <div id="detailAuthorProfile" class="party-member-card" style="cursor: pointer; display: flex; align-items: center; gap: 15px; text-align: left; background: var(--bg-hover);">
+                        <img id="detailAuthorAvatar" src="" class="pm-avatar" style="margin-bottom: 0;">
+                        <div>
+                            <div id="detailAuthorName" class="pm-name" style="font-size: 1.1rem;">닉네임</div>
+                            <div class="pm-class"><span id="detailAuthorClass">직업</span></div>
+                            <div class="pm-dps" style="margin-top: 4px;">아이템 Lv <span id="detailAuthorItemLevel">0</span></div>
+                        </div>
+                    </div>
+                    <p style="font-size: 0.8rem; color: #a78bfa; margin-top: 8px; text-align: center;">
+                        <i class="fa-solid fa-arrow-pointer"></i> 카드를 클릭하면 상세 페이지로 이동합니다.
+                    </p>
+                </div>
+                
+                <div style="margin-top:20px; text-align:center;">
+                    <a id="detailLink" href="#" target="_blank" class="btn-primary full-width hidden" style="display:inline-block; text-decoration:none;">오픈채팅/디스코드 참여</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
