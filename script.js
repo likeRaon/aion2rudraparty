@@ -4,6 +4,10 @@ const PROXY_URL = '';
 // 실제 서비스 시에는 서버를 통해 호출하거나 GitHub Secrets 등을 이용한 배포가 필요할 수 있습니다.
 const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1456559257078988821/5T73OUqYLgg1DaK5JI73Dv8Z_c7MVPbj6WRA4surCJZCVWIozOUhz_kX0aTGbJLwZBKF'; 
 
+const CONSTANTS = {
+    POST_EXPIRATION_MS: 3 * 60 * 60 * 1000 // 3시간 (밀리초)
+};
+
 let currentTab = 'party';
 let posts = [];
 let currentUser = null;
@@ -82,7 +86,8 @@ const elements = {
     detailAuthorProfile: document.getElementById('detailAuthorProfile'),
     guideBtn: document.getElementById('guideBtn'),
     guideModal: document.getElementById('guideModal'),
-    guideCloseBtn: document.querySelector('.guide-close')
+    guideCloseBtn: document.querySelector('.guide-close'),
+    toastContainer: document.getElementById('toastContainer')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -447,7 +452,61 @@ function loadPosts() {
     if (saved) {
         posts = JSON.parse(saved);
     }
+    // 게시글 로드 시 만료 검사 수행
+    checkExpiredPosts();
     renderPosts();
+}
+
+// 만료된 게시글 확인 및 삭제
+function checkExpiredPosts() {
+    const now = Date.now();
+    let expiredCount = 0;
+    
+    // 만료된 게시글 필터링
+    const activePosts = [];
+    const expiredPosts = [];
+
+    posts.forEach(post => {
+        const postTime = new Date(post.createdAt).getTime();
+        // 만료 시간 지났고, 아직 완료 상태가 아닌 경우 (완료된 글은 사용자가 보고싶어할 수 있으므로 제외할 수도 있지만, 여기선 전체 삭제)
+        if (now - postTime > CONSTANTS.POST_EXPIRATION_MS) {
+            expiredPosts.push(post);
+        } else {
+            activePosts.push(post);
+        }
+    });
+
+    if (expiredPosts.length > 0) {
+        expiredPosts.forEach(post => {
+            deleteDiscordMessage(post); // 디스코드 메시지 삭제 요청
+        });
+
+        posts = activePosts; // 게시글 리스트 갱신
+        savePosts(); // 저장
+        
+        expiredCount = expiredPosts.length;
+        showToast(`<i class="fa-solid fa-clock-rotate-left"></i> 유효기간(3시간)이 지난 게시글 ${expiredCount}개가 정리되었습니다.`);
+    }
+}
+
+// 토스트 메시지 표시 함수
+function showToast(message, duration = 4000) {
+    const container = elements.toastContainer;
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = message;
+
+    container.appendChild(toast);
+
+    // 일정 시간 후 삭제
+    setTimeout(() => {
+        toast.style.animation = 'toastFadeOut 0.3s forwards';
+        toast.addEventListener('animationend', () => {
+            toast.remove();
+        });
+    }, duration);
 }
 
 function renderPosts() {
@@ -537,7 +596,7 @@ function renderPosts() {
         } else {
             card.innerHTML = `
                 <div class="post-header">
-                    <div style="display:flex; gap:4px; flex-wrap:wrap; align-items:center;">
+                    <div class="badge-container">
                         ${statusHtml}
                         ${categoryHtml}
                         ${rolesHtml}
@@ -547,22 +606,22 @@ function renderPosts() {
                 <h3 class="post-title">${post.title}</h3>
                 <p class="post-content">${post.content}</p>
                 
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-                    ${post.link ? `<button onclick="event.stopPropagation(); window.open('${post.link}')" class="btn-outline" style="font-size:0.8rem;">오픈채팅/디코</button>` : '<span></span>'}
-                    <button onclick="event.stopPropagation(); checkPasswordAndManage(${post.id})" class="btn-outline" style="font-size:0.7rem; padding:4px 8px; margin-left:auto;">관리</button>
-                </div>
-                
                 <div class="post-footer">
                     <div class="author-info">
                         <img src="${post.author.avatar || 'https://via.placeholder.com/32'}" class="author-avatar" onerror="this.src='https://via.placeholder.com/32'">
-                        <div>
+                        <div class="author-detail">
                             <div class="author-name">${post.author.name}</div>
-                            <div style="font-size: 0.75rem; color: #a1a1aa;">
+                            <div class="author-meta">
                                 ${post.author.class} 
                                 ${dpsDisplay}
-                                <span style="font-size:0.7rem; color:#666; margin-left:4px;">(Lv.${itemLevelDisplay})</span>
+                                <span style="margin-left:4px;">(Lv.${itemLevelDisplay})</span>
                             </div>
                         </div>
+                    </div>
+                    
+                    <div style="display:flex; gap:8px;">
+                        ${post.link ? `<button onclick="event.stopPropagation(); window.open('${post.link}')" class="btn-outline btn-small">참여</button>` : ''}
+                        <button onclick="event.stopPropagation(); checkPasswordAndManage(${post.id})" class="btn-outline btn-small">관리</button>
                     </div>
                 </div>
             `;
