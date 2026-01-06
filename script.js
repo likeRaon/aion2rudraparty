@@ -49,12 +49,12 @@ const categoryData = {
         details: ["토벌전"],
         difficulties: ["쉬움", "보통", "어려움"]
     },
-    "닥사": {
+    "PVE (닥사)": {
         details: ["필드", "어비스"],
         difficulties: []
     },
-    "기타": {
-        details: ["자유 입력"],
+    "PVP": {
+        details: ["시공", "어비스"],
         difficulties: []
     }
 };
