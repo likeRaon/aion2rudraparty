@@ -460,6 +460,15 @@ input:focus, textarea:focus, select:focus {
     margin-left: 4px;
 }
 
+.category-badge {
+    font-size: 0.8rem;
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-right: 6px;
+}
+
 /* Modal */
 .modal {
     position: fixed;

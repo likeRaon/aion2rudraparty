@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>아이온2 루드라(성역) 파티 매칭</title>
+    <title>전투&명가 파티 매칭</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -13,7 +13,8 @@
         <header>
             <div class="logo">
                 <i class="fa-solid fa-dragon"></i>
-                <h1>루드라<span>(성역)</span> 파티 매칭</h1>
+                <h1>전투&amp;명가 파티 매칭</h1>
+                <i class="fa-regular fa-circle-question" id="guideBtn" style="font-size: 1.2rem; cursor: pointer; color: var(--text-sub); margin-left: 8px;"></i>
             </div>
             <div class="user-menu">
                 <button id="loginBtn" class="btn-outline">로그인</button>
@@ -30,16 +31,16 @@
             <section class="board-section">
                 <div class="board-tabs">
                     <button class="tab-btn active" data-tab="party">
-                        <i class="fa-solid fa-users"></i> 파티원 구해요.
-                        <span class="sub-text">(파티원이 필요해요.)</span>
+                        <i class="fa-solid fa-users"></i> 파티원 구해요
+                        <span class="sub-text">(파티원이 필요해요)</span>
                     </button>
                     <button class="tab-btn" data-tab="member">
-                        <i class="fa-solid fa-user-plus"></i> 파티 구해요.
+                        <i class="fa-solid fa-user-plus"></i> 파티 구해요
                         <span class="sub-text">(파티에 들어가고 싶어요)</span>
                     </button>
                     <button class="tab-btn" data-tab="completed">
-                        <i class="fa-solid fa-check-circle"></i> 매칭 완료.
-                        <span class="sub-text">(진행 중인 파티 보기)</span>
+                        <i class="fa-solid fa-check-circle"></i> 매칭 완료
+                        <span class="sub-text">(지난 파티 보기)</span>
                     </button>
                 </div>
 
@@ -57,12 +58,14 @@
 
                 <!-- 게시글 리스트 -->
                 <div id="postList" class="post-grid">
+                    <!-- 자바스크립트로 게시글이 여기에 추가됩니다 -->
                 </div>
             </section>
         </main>
 
         <footer>
-            <p>© 2026 Aion2 전투&명가 레기온 루드라 파티 매칭. unofficial fan site.</p>
+            <p>© 지켈 서버 근접</p>
+            <p>© 2026 Aion2 전투&명가 레기온 파티 매칭. unofficial fan site.</p>
             <p>GitHub Pages로 호스팅되어 24시간 무료로 운영됩니다.</p>
         </footer>
     </div>
@@ -99,6 +102,33 @@
             </div>
             <div class="modal-body">
                 <form id="postForm">
+                    <!-- 콘텐츠 선택 -->
+                    <div class="form-group">
+                        <label>콘텐츠 종류</label>
+                        <select id="postCategory" required>
+                            <option value="">선택해주세요</option>
+                            <option value="정복">정복</option>
+                            <option value="성역">성역</option>
+                            <option value="초월">초월</option>
+                            <option value="토벌전">토벌전</option>
+                            <option value="닥사">닥사</option>
+                            <option value="기타">기타</option>
+                        </select>
+                    </div>
+
+                    <!-- 세부 내용 및 난이도 (동적으로 변경됨) -->
+                    <div id="detailSelectGroup" class="form-group hidden">
+                        <label>세부 내용 / 난이도</label>
+                        <div style="display: flex; gap: 10px;">
+                            <select id="postDetail" style="flex: 1;">
+                                <option value="">선택</option>
+                            </select>
+                            <select id="postDifficulty" style="flex: 1;">
+                                <option value="">난이도</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="form-group">
                         <label>모집/지원 직업 (다중 선택 가능)</label>
                         <div class="checkbox-group">
@@ -143,7 +173,7 @@
 
                     <div class="form-group">
                         <label>제목</label>
-                        <input type="text" id="postTitle" required placeholder="예: 루드라 숙련 팟 힐러 모십니다">
+                        <input type="text" id="postTitle" required placeholder="예: 숙련 팟 힐러 모십니다">
                     </div>
 
                     <div class="form-group">
@@ -161,6 +191,7 @@
                         <input type="number" id="postMyDps" placeholder="예: 28500 (숫자만 입력)" style="font-family: 'Cafe24SsurroundAir';">
                     </div>
 
+                    <!-- 비밀번호 필드 추가 (보안 강화) -->
                     <div class="form-group">
                         <label>게시글 비밀번호 (필수)</label>
                         <input type="password" id="postPassword" required placeholder="글 수정/삭제 시 필요합니다 (4자리 이상)" minlength="4">
@@ -182,6 +213,7 @@
             </div>
             <div class="modal-body">
                 <div id="managePostInfo" style="margin-bottom: 20px;">
+                    <!-- JS로 채움 -->
                 </div>
 
                 <div class="form-group">
@@ -228,7 +260,8 @@
             <div class="modal-body">
                 <div class="detail-header">
                     <div style="flex:1;">
-                        <div id="detailRoles" style="margin-bottom:8px;"></div>
+                        <div id="detailCategoryBadge" style="margin-bottom: 8px; display: inline-block;"></div>
+                        <div id="detailRoles" style="margin-bottom:8px; display: inline-block;"></div>
                         <h4 id="detailTitle" class="detail-title">제목</h4>
                         <div class="detail-meta">
                             <span id="detailAuthor">작성자</span> | 
@@ -239,6 +272,7 @@
                 
                 <div id="detailContent" class="detail-content">내용</div>
                 
+                <!-- 파티원 정보 대신 작성자 프로필 표시 -->
                 <div class="form-group">
                     <label>작성자 정보</label>
                     <div id="detailAuthorProfile" class="party-member-card" style="cursor: pointer; display: flex; align-items: center; gap: 15px; text-align: left; background: var(--bg-hover);">
@@ -257,6 +291,29 @@
                 <div style="margin-top:20px; text-align:center;">
                     <a id="detailLink" href="#" target="_blank" class="btn-primary full-width hidden" style="display:inline-block; text-decoration:none;">오픈채팅/디스코드 참여</a>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 가이드 모달 -->
+    <div id="guideModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>웹사이트 사용 가이드</h3>
+                <button class="close-btn guide-close">&times;</button>
+            </div>
+            <div class="modal-body" style="line-height: 1.8; color: var(--text-sub);">
+                <p><strong>1. 로그인 (닉네임 설정)</strong></p>
+                <p>우측 상단의 '로그인' 버튼을 눌러 본인의 게임 닉네임을 입력하세요. 브라우저에 저장되어 재방문 시 유지됩니다.</p>
+                
+                <p style="margin-top: 15px;"><strong>2. 글쓰기 & 비밀번호</strong></p>
+                <p>파티 모집 또는 구직 글을 작성할 때 <strong>비밀번호(4자리 이상)</strong>를 설정해야 합니다. 이 비밀번호는 나중에 글을 수정, 삭제하거나 파티원을 관리할 때 사용됩니다.</p>
+                
+                <p style="margin-top: 15px;"><strong>3. 파티 관리</strong></p>
+                <p>내가 쓴 글에는 <strong>[관리]</strong> 버튼이 보입니다. 비밀번호를 입력하면 모집 상태를 '모집 완료'로 바꾸거나, 파티원을 수동으로 추가/삭제할 수 있습니다.</p>
+                
+                <p style="margin-top: 15px;"><strong>4. 디스코드 알림</strong></p>
+                <p>글이 등록되면 연동된 디스코드 채널로 알림이 전송됩니다.</p>
             </div>
         </div>
     </div>
