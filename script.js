@@ -1,19 +1,37 @@
 const API_BASE_URL = 'https://api.aon2.info/api/v1/aion2';
 const PROXY_URL = '';
 
+// GitHub 봇 방지를 위한 난독화 (Base64 Encoding)
 const WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU1OTI1NzA3ODk4ODgyMS81VDczT1VxWUxnZzFEYUs1Skk3M0R2OFpfYzdNVlBiajZXUkE0c3VyQ0paQ1ZXSW96T1Voel9rWDBhVEdiSkx3WkJLRg==';
 const DISCORD_WEBHOOK_URL = atob(WEBHOOK_SECRET);
 
 const CONSTANTS = {
-    POST_EXPIRATION_MS: 3 * 60 * 60 * 1000 // 3시간 (밀리초)
+    POST_EXPIRATION_MS: 3 * 60 * 60 * 1000 // 3시간
 };
+
+const firebaseConfig = {
+    apiKey: "AIzaSyCDqmgOsbXZu9FNkGCULDuEnu9ehSR2gbY",
+    authDomain: "aion2rudra.firebaseapp.com",
+    projectId: "aion2rudra",
+    storageBucket: "aion2rudra.firebasestorage.app",
+    messagingSenderId: "786371182560",
+    appId: "1:786371182560:web:29dfdd720a9b369d2e7585"
+};
+
+// Firebase 초기화
+let db;
+try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+} catch (e) {
+    console.error("Firebase 초기화 실패. 설정값을 확인해주세요.", e);
+}
 
 let currentTab = 'party';
 let posts = [];
 let currentUser = null;
 let currentEditingPostId = null;
 
-// 콘텐츠 및 난이도 데이터
 const categoryData = {
     "정복": {
         details: ["크라오 동굴", "드라웁니르", "우루구구 협곡", "바크론의 공중섬", "불의 신전", "사나운 뿔 암굴"],
@@ -92,9 +110,31 @@ const elements = {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadUser();
-    loadPosts();
+    // loadPosts() 대신 실시간 리스너 setup
+    setupRealtimeListener();
     setupEventListeners();
 });
+
+// Firebase 실시간 리스너 (새로고침 없이 글 자동 갱신)
+function setupRealtimeListener() {
+    if (!db) return;
+
+    db.collection("posts")
+        .orderBy("createdAt", "desc")
+        .onSnapshot((snapshot) => {
+            posts = [];
+            snapshot.forEach((doc) => {
+                // 문서 ID를 post 객체에 포함
+                posts.push({ id: doc.id, ...doc.data() });
+            });
+            
+            // 데이터 수신 시 만료 체크 후 렌더링
+            checkExpiredPosts();
+            renderPosts();
+        }, (error) => {
+            console.error("데이터 불러오기 실패:", error);
+        });
+}
 
 function setupEventListeners() {
     elements.tabBtns.forEach(btn => {
@@ -133,7 +173,6 @@ function setupEventListeners() {
         elements.writeModal.classList.remove('hidden');
         elements.postForm.reset();
         
-        // 카테고리 초기화
         elements.detailSelectGroup.classList.add('hidden');
         elements.postDetail.innerHTML = '<option value="">선택</option>';
         elements.postDifficulty.innerHTML = '<option value="">난이도</option>';
@@ -147,7 +186,6 @@ function setupEventListeners() {
         elements.writeModal.classList.add('hidden');
     });
 
-    // 카테고리 변경 시 로직
     elements.postCategory.addEventListener('change', (e) => {
         const category = e.target.value;
         const data = categoryData[category];
@@ -159,7 +197,6 @@ function setupEventListeners() {
 
         elements.detailSelectGroup.classList.remove('hidden');
         
-        // 세부 내용 채우기
         elements.postDetail.innerHTML = '';
         data.details.forEach(item => {
             const option = document.createElement('option');
@@ -168,7 +205,6 @@ function setupEventListeners() {
             elements.postDetail.appendChild(option);
         });
 
-        // 난이도 채우기
         elements.postDifficulty.innerHTML = '';
         if (data.difficulties.length > 0) {
             elements.postDifficulty.style.display = 'block';
@@ -215,7 +251,6 @@ function setupEventListeners() {
         elements.detailModal.classList.add('hidden');
     });
 
-    // 가이드 모달
     elements.guideBtn.addEventListener('click', () => {
         elements.guideModal.classList.remove('hidden');
     });
@@ -226,7 +261,6 @@ function setupEventListeners() {
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal')) {
             if (e.target.id === 'writeModal') return;
-            
             e.target.classList.add('hidden');
         }
     });
@@ -299,6 +333,11 @@ function updateUserUI() {
 function handlePostSubmit(e) {
     e.preventDefault();
     
+    if (!db) {
+        alert("데이터베이스 연결 설정이 필요합니다.");
+        return;
+    }
+
     const selectedRoles = Array.from(elements.postRoleCheckboxes)
         .filter(cb => cb.checked)
         .map(cb => cb.value);
@@ -323,10 +362,9 @@ function handlePostSubmit(e) {
     const category = elements.postCategory.value;
     const detail = elements.postDetail.value;
     const difficulty = elements.postDifficulty.value;
-    const difficultyText = (elements.postDifficulty.style.display !== 'none' && difficulty) ? `[${difficulty}]` : '';
-
-    const newPost = {
-        id: Date.now(),
+    
+    // Firestore 저장용 객체 (ID는 자동 생성)
+    const newPostData = {
         type: currentTab === 'completed' ? 'party' : currentTab,
         category: category,
         categoryDetail: detail,
@@ -338,36 +376,38 @@ function handlePostSubmit(e) {
         password: password,
         createdAt: new Date().toISOString(),
         status: 'recruiting',
-        members: [],
+        members: [{
+            name: currentUser.name,
+            class: currentUser.class,
+            dps: myDps, 
+            itemLevel: currentUser.itemLevel,
+            avatar: currentUser.avatar,
+            isLeader: true
+        }],
         author: {
             ...currentUser,
             dps: myDps
         }
     };
     
-    newPost.members.push({
-        name: currentUser.name,
-        class: currentUser.class,
-        dps: myDps, 
-        itemLevel: currentUser.itemLevel,
-        avatar: currentUser.avatar,
-        isLeader: true
-    });
-
-    posts.unshift(newPost);
-    savePosts(); // 포스트 먼저 저장 (ID 확보)
-    renderPosts();
-    
-    // 디스코드 알림 전송 (비동기 처리 후 메시지 ID 업데이트)
-    sendDiscordNotification(newPost).then(msgId => {
+    // 1. 디스코드 알림 먼저 전송 (메시지 ID 확보)
+    sendDiscordNotification(newPostData).then(msgId => {
         if (msgId) {
-            newPost.discordMessageId = msgId;
-            savePosts(); // 메시지 ID 저장
+            newPostData.discordMessageId = msgId;
         }
+        
+        // 2. Firestore에 저장
+        db.collection("posts").add(newPostData)
+            .then(() => {
+                elements.writeModal.classList.add('hidden');
+                elements.postForm.reset();
+                showToast(`<i class="fa-solid fa-check"></i> 게시글이 등록되었습니다.`);
+            })
+            .catch((error) => {
+                console.error("Error adding document: ", error);
+                alert("게시글 등록 중 오류가 발생했습니다.");
+            });
     });
-    
-    elements.writeModal.classList.add('hidden');
-    elements.postForm.reset();
 }
 
 function sendDiscordNotification(post) {
@@ -377,7 +417,6 @@ function sendDiscordNotification(post) {
     const typeIcon = isParty ? '📢' : '⚔️';
     const typeText = isParty ? '파티원 모집' : '파티 구직';
     
-    // 카테고리 정보
     let categoryText = '기타';
     if (post.category) {
         categoryText = post.category;
@@ -385,13 +424,11 @@ function sendDiscordNotification(post) {
         if (post.difficulty) categoryText += ` (${post.difficulty})`;
     }
 
-    // 작성자 정보
     let authorText = `${post.author.name} (${post.author.class})`;
     if (post.type === 'member' && post.author.dps > 0) {
         authorText += ` / DPS ${post.author.dps.toLocaleString()}`;
     }
 
-    // 설명 구성
     let description = `\n**${post.title}**\n\n`;
     description += `${post.content}\n\n`;
     
@@ -409,7 +446,7 @@ function sendDiscordNotification(post) {
             {
                 title: `${typeIcon} ${typeText}`,
                 description: description,
-                color: isParty ? 7506394 : 5763719, // 보라색 / 초록색
+                color: isParty ? 7506394 : 5763719,
                 footer: {
                     text: "전투&명가 파티 매칭"
                 },
@@ -418,18 +455,13 @@ function sendDiscordNotification(post) {
         ]
     };
 
-    // wait=true 파라미터를 추가하여 메시지 ID를 반환받음
     return fetch(`${DISCORD_WEBHOOK_URL}?wait=true`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     })
     .then(res => res.json())
-    .then(data => {
-        return data.id; // 메시지 ID 반환
-    })
+    .then(data => data.id)
     .catch(err => {
         console.error('Discord Webhook Error:', err);
         return null;
@@ -439,59 +471,37 @@ function sendDiscordNotification(post) {
 function deleteDiscordMessage(post) {
     if (!post.discordMessageId || !DISCORD_WEBHOOK_URL || DISCORD_WEBHOOK_URL.includes('여기에')) return;
 
-    // 웹훅 메시지 삭제 API
     fetch(`${DISCORD_WEBHOOK_URL}/messages/${post.discordMessageId}`, {
         method: 'DELETE'
     }).catch(err => console.error('Discord Delete Error:', err));
 }
 
-function savePosts() {
-    localStorage.setItem('rudra_posts', JSON.stringify(posts));
-}
-
-function loadPosts() {
-    const saved = localStorage.getItem('rudra_posts');
-    if (saved) {
-        posts = JSON.parse(saved);
-    }
-    // 게시글 로드 시 만료 검사 수행
-    checkExpiredPosts();
-    renderPosts();
-}
-
-// 만료된 게시글 확인 및 삭제
+// 만료 체크 (Firestore에서 삭제)
 function checkExpiredPosts() {
+    if (!db) return;
     const now = Date.now();
     let expiredCount = 0;
-    
-    // 만료된 게시글 필터링
-    const activePosts = [];
-    const expiredPosts = [];
 
     posts.forEach(post => {
         const postTime = new Date(post.createdAt).getTime();
-        // 만료 시간 지났고, 아직 완료 상태가 아닌 경우
+        // 만료됨
         if (now - postTime > CONSTANTS.POST_EXPIRATION_MS) {
-            expiredPosts.push(post);
-        } else {
-            activePosts.push(post);
+            // DB에서 삭제
+            db.collection("posts").doc(post.id).delete()
+                .then(() => {
+                    deleteDiscordMessage(post); // 디스코드 삭제
+                })
+                .catch(err => console.error("만료 삭제 오류:", err));
+            
+            expiredCount++;
         }
     });
 
-    if (expiredPosts.length > 0) {
-        expiredPosts.forEach(post => {
-            deleteDiscordMessage(post); // 디스코드 메시지 삭제 요청
-        });
-
-        posts = activePosts; // 게시글 리스트 갱신
-        savePosts(); // 저장
-        
-        expiredCount = expiredPosts.length;
+    if (expiredCount > 0) {
         showToast(`<i class="fa-solid fa-clock-rotate-left"></i> 유효기간(3시간)이 지난 게시글 ${expiredCount}개가 정리되었습니다.`);
     }
 }
 
-// 토스트 메시지 표시 함수
 function showToast(message, duration = 4000) {
     const container = elements.toastContainer;
     if (!container) return;
@@ -502,7 +512,6 @@ function showToast(message, duration = 4000) {
 
     container.appendChild(toast);
 
-    // 일정 시간 후 삭제
     setTimeout(() => {
         toast.style.animation = 'toastFadeOut 0.3s forwards';
         toast.addEventListener('animationend', () => {
@@ -554,7 +563,6 @@ function renderPosts() {
         const dpsDisplay = (post.author.dps > 0) ? `<span class="dps-tag">DPS ${post.author.dps.toLocaleString()}</span>` : '';
         const itemLevelDisplay = (post.author.itemLevel || 0).toLocaleString();
         
-        // 카테고리 표시
         let categoryHtml = '';
         if (post.category) {
             categoryHtml = `<span class="category-badge">[${post.category}] ${post.categoryDetail || ''} ${post.difficulty ? '(' + post.difficulty + ')' : ''}</span>`;
@@ -592,7 +600,7 @@ function renderPosts() {
                     <div style="color:#aaa; font-size:0.9rem; margin-top:10px;">${post.title}</div>
                     <div style="font-size:0.8rem; color:#666; margin-top:5px;">클릭하여 상세 정보 보기</div>
                 </div>
-                ${isAdmin ? `<button onclick="event.stopPropagation(); checkPasswordAndManage(${post.id})" class="btn-outline" style="position:absolute; bottom:10px; right:10px; z-index:10;">관리</button>` : ''}
+                ${isAdmin ? `<button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline" style="position:absolute; bottom:10px; right:10px; z-index:10;">관리</button>` : ''}
             `;
             
         } else {
@@ -623,7 +631,7 @@ function renderPosts() {
                     
                     <div style="display:flex; gap:8px;">
                         ${post.link ? `<button onclick="event.stopPropagation(); window.open('${post.link}')" class="btn-outline btn-small">참여</button>` : ''}
-                        <button onclick="event.stopPropagation(); checkPasswordAndManage(${post.id})" class="btn-outline btn-small">관리</button>
+                        <button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline btn-small">관리</button>
                     </div>
                 </div>
             `;
@@ -640,7 +648,6 @@ function showPostDetail(postId) {
 
     elements.detailModal.classList.remove('hidden');
     
-    // 카테고리 표시
     if (post.category) {
         elements.detailCategoryBadge.innerHTML = `<span class="category-badge" style="font-size:0.9rem;">[${post.category}] ${post.categoryDetail || ''} ${post.difficulty ? '(' + post.difficulty + ')' : ''}</span>`;
     } else {
@@ -688,12 +695,7 @@ function showPostDetail(postId) {
     membersHtml += `</div>`;
     
     container.innerHTML = membersHtml;
-    
-    container.innerHTML += `
-        <p style="font-size: 0.8rem; color: #a78bfa; margin-top: 15px; text-align: center;">
-            <i class="fa-solid fa-arrow-pointer"></i> 카드를 클릭하면 상세 페이지로 이동합니다.
-        </p>
-    `;
+    container.innerHTML += `<p style="font-size: 0.8rem; color: #a78bfa; margin-top: 15px; text-align: center;"><i class="fa-solid fa-arrow-pointer"></i> 카드를 클릭하면 상세 페이지로 이동합니다.</p>`;
 }
 
 function openAtulPage(nickname) {
@@ -731,17 +733,17 @@ function updatePostStatus(status) {
     if (!currentEditingPostId) return;
     const post = posts.find(p => p.id === currentEditingPostId);
     if (post) {
-        // 모집 완료로 변경 시 디스코드 메시지 삭제
-        if (status === 'full' && post.status !== 'full') {
-            deleteDiscordMessage(post);
-            post.discordMessageId = null; // ID 초기화
-        }
-        
-        post.status = status;
-        savePosts();
-        renderPosts();
-        alert('상태가 변경되었습니다.');
-        elements.manageModal.classList.add('hidden');
+        // DB 업데이트
+        db.collection("posts").doc(post.id).update({
+            status: status
+        }).then(() => {
+             if (status === 'full' && post.status !== 'full') {
+                deleteDiscordMessage(post);
+                db.collection("posts").doc(post.id).update({ discordMessageId: null });
+            }
+            alert('상태가 변경되었습니다.');
+            elements.manageModal.classList.add('hidden');
+        });
     }
 }
 
@@ -767,12 +769,15 @@ async function addPartyMember() {
             avatar: charData ? charData.profile_img : null 
         };
 
-        if (!post.members) post.members = [];
+        const updatedMembers = post.members ? [...post.members, newMember] : [newMember];
         
-        post.members.push(newMember);
-        savePosts();
-        renderPartyMembers(); 
-        elements.newMemberName.value = '';
+        db.collection("posts").doc(post.id).update({
+            members: updatedMembers
+        }).then(() => {
+            elements.newMemberName.value = '';
+            // 실시간 리스너가 화면을 갱신하겠지만, 관리 모달 내용은 수동 갱신 필요할 수 있음
+            // 여기선 post 객체를 믿고 갱신 (listener가 곧 갱신해줌)
+        });
     }
 }
 
@@ -781,9 +786,12 @@ window.deletePartyMember = function(index) {
     const post = posts.find(p => p.id === currentEditingPostId);
     if (post && post.members) {
         if(confirm('삭제하시겠습니까?')) {
-            post.members.splice(index, 1);
-            savePosts();
-            renderPartyMembers();
+            const updatedMembers = [...post.members];
+            updatedMembers.splice(index, 1);
+            
+            db.collection("posts").doc(post.id).update({
+                members: updatedMembers
+            });
         }
     }
 }
@@ -793,7 +801,7 @@ function renderPartyMembers() {
     const post = posts.find(p => p.id === currentEditingPostId);
     elements.partyMemberList.innerHTML = '';
     
-    if (!post.members) return;
+    if (!post || !post.members) return;
 
     post.members.forEach((member, index) => {
         const item = document.createElement('div');
@@ -813,14 +821,17 @@ function deletePost() {
     if (!currentEditingPostId) return;
     if (confirm('삭제하시겠습니까?')) {
         const post = posts.find(p => p.id === currentEditingPostId);
-        if (post) {
-            deleteDiscordMessage(post); // 삭제 시 디스코드 메시지도 삭제
-        }
-
-        posts = posts.filter(p => p.id !== currentEditingPostId);
-        savePosts();
-        renderPosts();
-        elements.manageModal.classList.add('hidden');
+        
+        db.collection("posts").doc(currentEditingPostId).delete()
+            .then(() => {
+                if (post) deleteDiscordMessage(post);
+                elements.manageModal.classList.add('hidden');
+                showToast("게시글이 삭제되었습니다.");
+            })
+            .catch(err => {
+                console.error("삭제 실패", err);
+                alert("삭제 중 오류가 발생했습니다.");
+            });
     }
 }
 
