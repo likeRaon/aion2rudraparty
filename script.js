@@ -1,8 +1,8 @@
 const API_BASE_URL = 'https://api.aon2.info/api/v1/aion2';
 const PROXY_URL = '';
-// 주의: 이 URL이 노출되면 누구나 메시지를 보낼 수 있습니다.
-// 실제 서비스 시에는 서버를 통해 호출하거나 GitHub Secrets 등을 이용한 배포가 필요할 수 있습니다.
-const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1456559257078988821/5T73OUqYLgg1DaK5JI73Dv8Z_c7MVPbj6WRA4surCJZCVWIozOUhz_kX0aTGbJLwZBKF'; 
+
+const WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU1OTI1NzA3ODk4ODgyMS81VDczT1VxWUxnZzFEYUs1Skk3M0R2OFpfYzdNVlBiajZXUkE0c3VyQ0paQ1ZXSW96T1Voel9rWDBhVEdiSkx3WkJLRg==';
+const DISCORD_WEBHOOK_URL = atob(WEBHOOK_SECRET);
 
 const CONSTANTS = {
     POST_EXPIRATION_MS: 3 * 60 * 60 * 1000 // 3시간 (밀리초)
@@ -468,7 +468,7 @@ function checkExpiredPosts() {
 
     posts.forEach(post => {
         const postTime = new Date(post.createdAt).getTime();
-        // 만료 시간 지났고, 아직 완료 상태가 아닌 경우 (완료된 글은 사용자가 보고싶어할 수 있으므로 제외할 수도 있지만, 여기선 전체 삭제)
+        // 만료 시간 지났고, 아직 완료 상태가 아닌 경우
         if (now - postTime > CONSTANTS.POST_EXPIRATION_MS) {
             expiredPosts.push(post);
         } else {

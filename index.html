@@ -31,12 +31,12 @@
             <section class="board-section">
                 <div class="board-tabs">
                     <button class="tab-btn active" data-tab="party">
-                        <i class="fa-solid fa-users"></i> 파티원 구해요
-                        <span class="sub-text">(파티원이 필요해요)</span>
+                        <i class="fa-solid fa-users"></i> 파티원 구해요.
+                        <span class="sub-text">(파티원이 필요해요.)</span>
                     </button>
                     <button class="tab-btn" data-tab="member">
-                        <i class="fa-solid fa-user-plus"></i> 파티 구해요
-                        <span class="sub-text">(파티에 들어가고 싶어요)</span>
+                        <i class="fa-solid fa-user-plus"></i> 파티 구해요.
+                        <span class="sub-text">(파티에 들어가고 싶어요.)</span>
                     </button>
                     <button class="tab-btn" data-tab="completed">
                         <i class="fa-solid fa-check-circle"></i> 매칭 완료
@@ -106,7 +106,7 @@
                     <div class="form-group">
                         <label>콘텐츠 종류</label>
                         <select id="postCategory" required>
-                            <option value="">선택해주세요</option>
+                            <option value="">선택해 주세요.</option>
                             <option value="정복">정복</option>
                             <option value="성역">성역</option>
                             <option value="초월">초월</option>
@@ -173,12 +173,12 @@
 
                     <div class="form-group">
                         <label>제목</label>
-                        <input type="text" id="postTitle" required placeholder="예: 숙련 팟 힐러 모십니다">
+                        <input type="text" id="postTitle" required placeholder="예: 초월 3단계 가실분">
                     </div>
 
                     <div class="form-group">
                         <label>내용</label>
-                        <textarea id="postContent" required placeholder="접속 가능 시간 등을 자유롭게 적어주세요."></textarea>
+                        <textarea id="postContent" required placeholder="출발 시간 혹은 기타 특이 사항 작성"></textarea>
                     </div>
                     
                     <div class="form-group">
@@ -187,14 +187,14 @@
                     </div>
 
                     <div class="form-group">
-                        <label>나의 전투력 (DPS)</label>
+                        <label>아툴 DPS 점수 (선택)</label>
                         <input type="number" id="postMyDps" placeholder="예: 28500 (숫자만 입력)" style="font-family: 'Cafe24SsurroundAir';">
                     </div>
 
-                    <!-- 비밀번호 필드 추가 (보안 강화) -->
+                    <!-- 비밀번호 필드 -->
                     <div class="form-group">
                         <label>게시글 비밀번호 (필수)</label>
-                        <input type="password" id="postPassword" required placeholder="글 수정/삭제 시 필요합니다 (4자리 이상)" minlength="4">
+                        <input type="password" id="postPassword" required placeholder="글 수정/삭제 시 사용 (4자리 이상)" minlength="4">
                         <p style="font-size: 0.8rem; color: var(--danger); margin-top: 5px;">* 사칭 방지를 위해 꼭 설정해주세요.</p>
                     </div>
 
