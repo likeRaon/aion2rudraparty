@@ -225,6 +225,8 @@ function setupEventListeners() {
 
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal')) {
+            if (e.target.id === 'writeModal') return;
+            
             e.target.classList.add('hidden');
         }
     });
@@ -409,7 +411,7 @@ function sendDiscordNotification(post) {
                 description: description,
                 color: isParty ? 7506394 : 5763719, // 보라색 / 초록색
                 footer: {
-                    text: "루드라(성역) 파티 매칭"
+                    text: "전투&명가 파티 매칭"
                 },
                 timestamp: new Date().toISOString()
             }
