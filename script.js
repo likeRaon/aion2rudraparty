@@ -285,7 +285,7 @@ function setupEventListeners() {
     });
 }
 
-// 글쓰기 모달 열기 (공지 여부, 수정 데이터)
+// 글쓰기 모달 열기
 function openWriteModal(isNotice, editPost = null) {
     if (!currentUser) {
         alert('닉네임을 먼저 설정해주세요 (로그인).');
@@ -307,7 +307,6 @@ function openWriteModal(isNotice, editPost = null) {
         elements.postMyDps.value = currentUser.dps;
     }
 
-    // 수정 모드일 경우 데이터 채워넣기
     if (isEditMode && editPost) {
         elements.postTitle.value = editPost.title;
         elements.postContent.value = editPost.content;
@@ -319,17 +318,17 @@ function openWriteModal(isNotice, editPost = null) {
     }
 
     if (isNotice) {
-        // 공지 작성/수정 모드 (단순화)
+        // 공지 작성/수정 모드
         elements.noticeMessage.classList.remove('hidden');
         elements.categoryGroup.classList.add('hidden');
         elements.roleGroup.classList.add('hidden');
         elements.linkGroup.classList.add('hidden');
         elements.dpsGroup.classList.add('hidden');
         elements.expirationGroup.classList.add('hidden');
-        elements.passwordGroup.classList.add('hidden'); // 공지 비밀번호 숨김
+        elements.passwordGroup.classList.add('hidden');
         
         elements.postCategory.removeAttribute('required');
-        elements.postPassword.removeAttribute('required'); // 공지 비밀번호 필수 아님
+        elements.postPassword.removeAttribute('required');
     } else {
         // 일반 작성 모드
         elements.noticeMessage.classList.add('hidden');
@@ -342,7 +341,7 @@ function openWriteModal(isNotice, editPost = null) {
 
         elements.postCategory.setAttribute('required', 'true');
         if (!isEditMode) elements.postPassword.setAttribute('required', 'true');
-        else elements.postPassword.removeAttribute('required'); // 수정 시 비밀번호는 확인용으로 별도 처리 (여기선 생략)
+        else elements.postPassword.removeAttribute('required');
     }
 }
 
@@ -428,7 +427,6 @@ function handlePostSubmit(e) {
 
     const password = elements.postPassword.value;
 
-    // 일반 글쓰기에서만 비밀번호 필수 (수정 시에는 확인 안함으로 단순화하거나 필요시 추가)
     if (!isNoticeWritingMode && !isEditMode) {
         if (!password || password.length < 4) {
             alert('비밀번호를 4자리 이상 입력해주세요.');
@@ -487,7 +485,7 @@ function handlePostSubmit(e) {
         content: elements.postContent.value,
     };
 
-    // 새로 작성할 때만 들어가는 필드들
+    // 새로 작성할 때만 들어가는 필드
     if (!isEditMode) {
         postData.type = postType;
         postData.category = category;
@@ -495,7 +493,7 @@ function handlePostSubmit(e) {
         postData.difficulty = difficulty;
         postData.roles = selectedRoles;
         postData.link = link;
-        postData.password = password; // 공지는 비어있을 수 있음
+        postData.password = password;
         postData.createdAt = new Date().toISOString();
         postData.expirationTime = expirationMs;
         postData.status = 'recruiting';
@@ -509,8 +507,6 @@ function handlePostSubmit(e) {
         }];
         postData.author = { ...currentUser, dps: myDps };
     } else {
-        // 수정 모드일 경우 (공지는 제목/내용만 수정)
-        // 일반 글 수정 로직이 필요하다면 여기서 필드 추가
     }
     
     if (isEditMode && editingPostData) {
@@ -668,7 +664,7 @@ function showToast(message, duration = 4000) {
     }, duration);
 }
 
-// 좌측 배너용 공지사항 렌더링 (더보기 기능 포함)
+// 좌측 배너용 공지사항 렌더링
 function renderNotices(showAll = false) {
     const noticeList = elements.noticeList;
     if (!noticeList) return;
@@ -681,7 +677,7 @@ function renderNotices(showAll = false) {
         return;
     }
 
-    // 3개까지만 보여주거나, showAll이면 전체 보여줌
+    // showAll이면 전체 보여줌
     const displayNotices = showAll ? notices : notices.slice(0, CONSTANTS.NOTICE_LIMIT);
     
     if (!showAll && notices.length > CONSTANTS.NOTICE_LIMIT) {
@@ -885,7 +881,6 @@ function showPostDetail(postId) {
 
     elements.detailModal.classList.remove('hidden');
     
-    // 공지사항일 경우 파티 정보 섹션 숨김
     if (post.type === 'notice') {
         elements.detailPartySection.classList.add('hidden');
         elements.detailCategoryBadge.innerHTML = '<span class="notice-badge" style="font-size:0.9rem;">NOTICE</span>';
@@ -946,8 +941,6 @@ function renderDetailPartyList(post) {
     
     if (post.members && post.members.length > 0) {
         post.members.forEach(m => {
-            // 작성자는 제외하고 보여줄지, 포함할지 결정. 보통 목록에는 모두 포함.
-            // 여기서는 목록 전체 표시
             const avatarSrc = m.avatar ? m.avatar : 'https://via.placeholder.com/60?text=' + encodeURIComponent(m.name.substring(0,1));
             const dpsVal = m.dps > 0 ? `DPS ${m.dps.toLocaleString()}` : '';
             const itemLevelVal = m.itemLevel || 0;

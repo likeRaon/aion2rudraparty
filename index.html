@@ -36,7 +36,6 @@
                     </button>
                 </div>
                 <div id="noticeList" class="notice-list">
-                    <!-- 공지사항 카드가 여기에 추가됩니다 -->
                     <div class="notice-empty">등록된 공지사항이 없습니다.</div>
                 </div>
                 <!-- 더보기 버튼 -->
@@ -91,7 +90,6 @@
 
                 <!-- 게시글 리스트 -->
                 <div id="postList" class="post-grid">
-                    <!-- 자바스크립트로 게시글이 여기에 추가됩니다 -->
                 </div>
             </main>
         </div>
@@ -135,12 +133,12 @@
             </div>
             <div class="modal-body">
                 <form id="postForm">
-                    <!-- 공지사항용 안내 메시지 (JS로 제어) -->
+                    <!-- 공지사항용 안내 메시지 -->
                     <div id="noticeMessage" class="form-group hidden" style="background: rgba(245, 158, 11, 0.1); padding: 15px; border-radius: 8px; border: 1px solid #f59e0b; text-align: center;">
                         <p style="color: #f59e0b; font-weight: 700; margin: 0;"><i class="fa-solid fa-bullhorn"></i> 공지사항 작성 중</p>
                     </div>
 
-                    <!-- 콘텐츠 선택 (공지일 때 숨김) -->
+                    <!-- 콘텐츠 선택 -->
                     <div class="form-group" id="categoryGroup">
                         <label>콘텐츠 종류</label>
                         <select id="postCategory" required>
@@ -154,7 +152,7 @@
                         </select>
                     </div>
 
-                    <!-- 세부 내용 및 난이도 (동적으로 변경됨) -->
+                    <!-- 세부 내용 및 난이도 -->
                     <div id="detailSelectGroup" class="form-group hidden">
                         <label>세부 내용 / 난이도</label>
                         <div style="display: flex; gap: 10px;">
@@ -242,7 +240,7 @@
                         <p style="font-size: 0.8rem; color: var(--text-sub);">* 설정한 시간이 지나면 게시글이 자동으로 삭제됩니다.</p>
                     </div>
 
-                    <!-- 비밀번호 필드 (공지일 때 숨김) -->
+                    <!-- 비밀번호 필드 -->
                     <div class="form-group" id="passwordGroup">
                         <label>게시글 비밀번호 (필수)</label>
                         <input type="password" id="postPassword" placeholder="글 수정/삭제 시 사용 (4자리 이상)" minlength="4">
@@ -264,7 +262,6 @@
             </div>
             <div class="modal-body">
                 <div id="managePostInfo" style="margin-bottom: 20px;">
-                    <!-- JS로 채움 -->
                 </div>
 
                 <div class="form-group">
@@ -323,7 +320,7 @@
                 
                 <div id="detailContent" class="detail-content">내용</div>
                 
-                <!-- 파티 관련 정보 영역 (공지일 때 숨김) -->
+                <!-- 파티 관련 정보 영역 -->
                 <div id="detailPartySection">
                     <div class="form-group">
                         <label>작성자 정보</label>
