@@ -76,22 +76,22 @@ button, input, select, textarea {
 }
 
 .app-container {
-    max-width: 1200px;
+    max-width: 1600px;
     margin: 0 auto;
     padding: 20px;
     min-height: 100vh;
     display: flex;
-    flex-direction: column;
+    flex-direction: column; /* 헤더 상단, 바디 하단 */
 }
 
 /* =========================================
-   Header
+   Header (최상단)
    ========================================= */
 header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 20px 0;
+    padding-bottom: 20px;
     margin-bottom: 30px;
     border-bottom: 1px solid var(--border);
 }
@@ -118,6 +118,138 @@ header {
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+/* =========================================
+   Layout Body (2 Columns)
+   ========================================= */
+.layout-body {
+    display: flex;
+    gap: 30px;
+    align-items: flex-start; /* 상단 정렬 */
+    width: 100%;
+    flex: 1;
+}
+
+/* =========================================
+   Notice Sidebar (Left)
+   ========================================= */
+.notice-sidebar {
+    width: 300px;
+    flex-shrink: 0;
+    /* 스크롤 시 따라오도록 sticky 적용 */
+    position: sticky;
+    top: 20px; 
+    
+    background: rgba(20, 20, 25, 0.5);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    /* 스크롤바 숨김 처리 (깔끔하게) */
+    scrollbar-width: none;
+}
+
+.notice-sidebar::-webkit-scrollbar {
+    display: none;
+}
+
+.section-header-area {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.section-title {
+    font-size: 1.1rem;
+    color: #fbbf24;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.95;
+}
+
+.notice-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.notice-card {
+    background: rgba(251, 191, 36, 0.05);
+    border: 1px solid rgba(251, 191, 36, 0.15);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.notice-card:hover {
+    background: rgba(251, 191, 36, 0.08);
+    border-color: rgba(251, 191, 36, 0.3);
+}
+
+.notice-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.notice-badge {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+}
+
+.notice-date {
+    font-size: 0.75rem;
+    color: var(--text-sub);
+    opacity: 0.8;
+}
+
+.notice-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: #fcd34d;
+}
+
+.notice-content {
+    font-size: 0.85rem;
+    color: var(--text-sub);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.notice-empty {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 20px;
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    border: 1px dashed var(--border);
+}
+
+/* =========================================
+   Board Section (Right Content)
+   ========================================= */
+.board-section {
+    flex: 1;
+    min-width: 0; /* Flex item overflow 방지 */
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
 }
 
 /* =========================================
@@ -162,6 +294,11 @@ header {
     background: var(--bg-hover);
 }
 
+.btn-small {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+}
+
 /* 폼 요소 스타일 */
 input[type="text"], 
 input[type="url"], 
@@ -190,18 +327,11 @@ input::placeholder, textarea::placeholder {
 }
 
 /* =========================================
-   Board Section (Tabs & Filters)
+   Board Tabs & Filters
    ========================================= */
-.board-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-}
-
 .board-tabs {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); /* 반응형 그리드 */
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); /* 반응형 그리드 */
     gap: 12px;
     background: var(--bg-card);
     padding: 8px;
@@ -256,27 +386,29 @@ input::placeholder, textarea::placeholder {
 }
 
 .filter-group select {
-    min-width: 180px;
+    min-width: 160px;
     cursor: pointer;
 }
 
 /* =========================================
-   Post Grid & Cards (Main UI)
+   Post Grid & Cards (Compact UI)
    ========================================= */
 .post-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 24px;
+    /* 카드를 좀 더 촘촘하게 배치 (minmax 280px) */
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
 }
 
 .post-card {
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: 24px;
+    /* 패딩 대폭 축소 */
+    padding: 16px; 
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 10px; /* 간격 축소 */
     transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
     cursor: pointer;
     position: relative;
@@ -299,20 +431,21 @@ input::placeholder, textarea::placeholder {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 10px;
+    gap: 8px;
+    margin-bottom: 4px;
 }
 
 .badge-container {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 4px;
 }
 
-/* 배지 스타일 통일 */
+/* 배지 스타일 축소 */
 .party-status, .category-badge, .role-badge {
-    padding: 4px 10px;
+    padding: 2px 8px; 
     border-radius: 9999px; /* Pill shape */
-    font-size: 0.75rem;
+    font-size: 0.7rem; /* 폰트 축소 */
     font-weight: 700;
     line-height: 1.4;
     letter-spacing: 0.02em;
@@ -324,17 +457,17 @@ input::placeholder, textarea::placeholder {
 .role-badge { background: var(--bg-hover); color: var(--primary-light); border: 1px solid var(--border); }
 
 .post-time {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
     white-space: nowrap;
 }
 
 /* 카드 본문 */
 .post-title {
-    font-size: 1.15rem;
+    font-size: 1.05rem; /* 제목 약간 축소 */
     color: var(--text-main);
-    line-height: 1.4;
-    margin-bottom: 4px;
+    line-height: 1.3;
+    margin-bottom: 2px;
     /* 1줄 말줄임 */
     white-space: nowrap;
     overflow: hidden;
@@ -343,19 +476,21 @@ input::placeholder, textarea::placeholder {
 
 .post-content {
     color: var(--text-sub);
-    font-size: 0.95rem;
-    line-height: 1.6;
-    height: 3.2em; /* 2줄 높이 고정 */
+    font-size: 0.9rem;
+    line-height: 1.5;
+    /* 2줄 고정 */
+    height: 2.8em; 
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    margin-bottom: 4px;
 }
 
 /* 카드 하단 작성자 정보 */
 .post-footer {
     margin-top: auto; /* 하단 고정 */
-    padding-top: 16px;
+    padding-top: 10px; /* 간격 축소 */
     border-top: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -365,12 +500,12 @@ input::placeholder, textarea::placeholder {
 .author-info {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
 }
 
 .author-avatar {
-    width: 36px;
-    height: 36px;
+    width: 32px; /* 아바타 축소 */
+    height: 32px;
     border-radius: 50%;
     object-fit: cover;
     background: var(--bg-hover);
@@ -384,16 +519,16 @@ input::placeholder, textarea::placeholder {
 
 .author-name {
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.85rem; /* 폰트 축소 */
     color: var(--text-main);
 }
 
 .author-meta {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: var(--text-muted);
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
 }
 
 .dps-tag {
@@ -421,11 +556,11 @@ input::placeholder, textarea::placeholder {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 12px;
 }
 
 .full-text {
-    font-size: 1.5rem;
+    font-size: 1.3rem;
     color: var(--danger);
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -438,8 +573,8 @@ input::placeholder, textarea::placeholder {
 }
 
 .full-member-avatar {
-    width: 48px;
-    height: 48px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     border: 3px solid var(--bg-card);
     background: var(--bg-hover);
@@ -720,9 +855,22 @@ footer p {
 .full-width { width: 100%; }
 
 /* Mobile Optimization */
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .app-container {
         padding: 16px;
+        /* 모바일에서는 세로 배치 */
+    }
+
+    .layout-body {
+        flex-direction: column;
+        gap: 20px;
+    }
+
+    .notice-sidebar {
+        width: 100%;
+        position: static;
+        margin-bottom: 10px;
+        max-height: none;
     }
 
     /* 헤더 간소화 */
@@ -741,7 +889,7 @@ footer p {
         justify-content: center;
     }
 
-    /* 탭 버튼 가로 스크롤 가능하게 할 수도 있으나, 여기선 Stack */
+    /* 탭 버튼 */
     .board-tabs {
         grid-template-columns: 1fr 1fr 1fr;
         gap: 8px;

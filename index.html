@@ -9,7 +9,7 @@
 </head>
 <body>
     <div class="app-container">
-        <!-- 헤더 -->
+        <!-- 1. 헤더 (전체 너비 최상단 고정) -->
         <header>
             <div class="logo">
                 <i class="fa-solid fa-dragon"></i>
@@ -25,18 +25,37 @@
             </div>
         </header>
 
-        <!-- 메인 컨텐츠 -->
-        <main>
-            <!-- 게시판 섹션 -->
-            <section class="board-section">
+        <!-- 2. 메인 바디 (좌: 공지 / 우: 게시판) -->
+        <div class="layout-body">
+            <!-- 좌측 공지사항 사이드바 -->
+            <aside class="notice-sidebar">
+                <div class="section-header-area">
+                    <h3 class="section-title"><i class="fa-solid fa-bullhorn"></i> 공지사항</h3>
+                    <button id="writeNoticeBtn" class="btn-small btn-outline hidden" style="padding: 2px 6px; font-size: 0.75rem;">
+                        <i class="fa-solid fa-plus"></i> 작성
+                    </button>
+                </div>
+                <div id="noticeList" class="notice-list">
+                    <!-- 공지사항 카드가 여기에 추가됩니다 -->
+                    <div class="notice-empty">등록된 공지사항이 없습니다.</div>
+                </div>
+                <!-- 더보기 버튼 -->
+                <button id="loadMoreNoticeBtn" class="btn-outline full-width hidden" style="margin-top: 8px; font-size: 0.8rem; padding: 6px;">
+                    <i class="fa-solid fa-chevron-down"></i> 더보기
+                </button>
+            </aside>
+
+            <!-- 우측 게시판 섹션 -->
+            <main class="board-section">
+                <!-- 게시판 탭 -->
                 <div class="board-tabs">
                     <button class="tab-btn active" data-tab="party">
-                        <i class="fa-solid fa-users"></i> 파티원 구해요.
-                        <span class="sub-text">(파티원이 필요해요.)</span>
+                        <i class="fa-solid fa-users"></i> 파티원 구해요
+                        <span class="sub-text">(파티원이 필요해요)</span>
                     </button>
                     <button class="tab-btn" data-tab="member">
-                        <i class="fa-solid fa-user-plus"></i> 파티 구해요.
-                        <span class="sub-text">(파티에 들어가고 싶어요.)</span>
+                        <i class="fa-solid fa-user-plus"></i> 파티 구해요
+                        <span class="sub-text">(파티에 들어가고 싶어요)</span>
                     </button>
                     <button class="tab-btn" data-tab="completed">
                         <i class="fa-solid fa-check-circle"></i> 매칭 완료
@@ -44,14 +63,28 @@
                     </button>
                 </div>
 
+                <!-- 필터 및 글쓰기 버튼 -->
                 <div class="board-actions">
-                    <div class="filter-group">
-                        <select id="roleFilter">
-                            <option value="all">모든 직업 보기</option>
-                            <option value="tank">탱커 (수호성/검성)</option>
-                            <option value="dps">딜러 (살성/궁성/마도성/정령성)</option>
-                            <option value="healer">힐러 (치유성/호법성)</option>
-                        </select>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <div class="filter-group">
+                            <select id="roleFilter">
+                                <option value="all">모든 직업 보기</option>
+                                <option value="tank">탱커 (수호성/검성)</option>
+                                <option value="dps">딜러 (살성/궁성/마도성/정령성)</option>
+                                <option value="healer">힐러 (치유성/호법성)</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <select id="categoryFilter">
+                                <option value="all">모든 콘텐츠 보기</option>
+                                <option value="정복">정복</option>
+                                <option value="성역">성역</option>
+                                <option value="초월">초월</option>
+                                <option value="토벌전">토벌전</option>
+                                <option value="PVE (닥사)">PVE (닥사)</option>
+                                <option value="PVP">PVP</option>
+                            </select>
+                        </div>
                     </div>
                     <button id="writeBtn" class="btn-primary"><i class="fa-solid fa-pen"></i> 글쓰기</button>
                 </div>
@@ -60,8 +93,8 @@
                 <div id="postList" class="post-grid">
                     <!-- 자바스크립트로 게시글이 여기에 추가됩니다 -->
                 </div>
-            </section>
-        </main>
+            </main>
+        </div>
 
         <footer>
             <p>© 지켈 서버 근접</p>
@@ -102,8 +135,13 @@
             </div>
             <div class="modal-body">
                 <form id="postForm">
-                    <!-- 콘텐츠 선택 -->
-                    <div class="form-group">
+                    <!-- 공지사항용 안내 메시지 (JS로 제어) -->
+                    <div id="noticeMessage" class="form-group hidden" style="background: rgba(245, 158, 11, 0.1); padding: 15px; border-radius: 8px; border: 1px solid #f59e0b; text-align: center;">
+                        <p style="color: #f59e0b; font-weight: 700; margin: 0;"><i class="fa-solid fa-bullhorn"></i> 공지사항 작성 중</p>
+                    </div>
+
+                    <!-- 콘텐츠 선택 (공지일 때 숨김) -->
+                    <div class="form-group" id="categoryGroup">
                         <label>콘텐츠 종류</label>
                         <select id="postCategory" required>
                             <option value="">선택해 주세요.</option>
@@ -129,7 +167,7 @@
                         </div>
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group" id="roleGroup">
                         <label>모집/지원 직업 (다중 선택 가능)</label>
                         <div class="checkbox-group">
                             <div class="checkbox-item">
@@ -181,24 +219,37 @@
                         <textarea id="postContent" required placeholder="출발 시간 혹은 기타 특이 사항 작성"></textarea>
                     </div>
                     
-                    <div class="form-group">
+                    <div class="form-group" id="linkGroup">
                         <label>오픈채팅/디스코드 링크 (선택)</label>
                         <input type="url" id="postLink" placeholder="https://open.kakao.com/...">
                     </div>
 
-                    <div class="form-group">
+                    <div class="form-group" id="dpsGroup">
                         <label>아툴 DPS 점수 (선택)</label>
                         <input type="number" id="postMyDps" placeholder="예: 28500 (숫자만 입력)" style="font-family: 'Cafe24SsurroundAir';">
                     </div>
 
-                    <!-- 비밀번호 필드 -->
-                    <div class="form-group">
+                    <div class="form-group" id="expirationGroup">
+                        <label>게시글 유효 기간 (자동 삭제)</label>
+                        <select id="postExpiration">
+                            <option value="1">1시간</option>
+                            <option value="3" selected>3시간 (기본)</option>
+                            <option value="6">6시간</option>
+                            <option value="12">12시간</option>
+                            <option value="24">24시간</option>
+                            <option value="0">유지 (자동 삭제 안 함)</option>
+                        </select>
+                        <p style="font-size: 0.8rem; color: var(--text-sub);">* 설정한 시간이 지나면 게시글이 자동으로 삭제됩니다.</p>
+                    </div>
+
+                    <!-- 비밀번호 필드 (공지일 때 숨김) -->
+                    <div class="form-group" id="passwordGroup">
                         <label>게시글 비밀번호 (필수)</label>
-                        <input type="password" id="postPassword" required placeholder="글 수정/삭제 시 사용 (4자리 이상)" minlength="4">
+                        <input type="password" id="postPassword" placeholder="글 수정/삭제 시 사용 (4자리 이상)" minlength="4">
                         <p style="font-size: 0.8rem; color: var(--danger); margin-top: 5px;">* 사칭 방지를 위해 꼭 설정해주세요.</p>
                     </div>
 
-                    <button type="submit" class="btn-primary full-width">등록하기</button>
+                    <button type="submit" id="submitPostBtn" class="btn-primary full-width">등록하기</button>
                 </form>
             </div>
         </div>
@@ -272,20 +323,27 @@
                 
                 <div id="detailContent" class="detail-content">내용</div>
                 
-                <!-- 파티원 정보 대신 작성자 프로필 표시 -->
-                <div class="form-group">
-                    <label>작성자 정보</label>
-                    <div id="detailAuthorProfile" class="party-member-card" style="cursor: pointer; display: flex; align-items: center; gap: 15px; text-align: left; background: var(--bg-hover);">
-                        <img id="detailAuthorAvatar" src="" class="pm-avatar" style="margin-bottom: 0;">
-                        <div>
-                            <div id="detailAuthorName" class="pm-name" style="font-size: 1.1rem;">닉네임</div>
-                            <div class="pm-class"><span id="detailAuthorClass">직업</span></div>
-                            <div class="pm-dps" style="margin-top: 4px;">아이템 Lv <span id="detailAuthorItemLevel">0</span></div>
+                <!-- 파티 관련 정보 영역 (공지일 때 숨김) -->
+                <div id="detailPartySection">
+                    <div class="form-group">
+                        <label>작성자 정보</label>
+                        <div id="detailAuthorProfile" class="party-member-card" style="cursor: pointer; display: flex; align-items: center; gap: 15px; text-align: left; background: var(--bg-hover);">
+                            <img id="detailAuthorAvatar" src="" class="pm-avatar" style="margin-bottom: 0;">
+                            <div>
+                                <div id="detailAuthorName" class="pm-name" style="font-size: 1.1rem;">닉네임</div>
+                                <div class="pm-class"><span id="detailAuthorClass">직업</span></div>
+                                <div class="pm-dps" style="margin-top: 4px;">아이템 Lv <span id="detailAuthorItemLevel">0</span></div>
+                            </div>
                         </div>
+                        <p style="font-size: 0.8rem; color: #a78bfa; margin-top: 8px; text-align: center;">
+                            <i class="fa-solid fa-arrow-pointer"></i> 카드를 클릭하면 상세 페이지로 이동합니다.
+                        </p>
                     </div>
-                    <p style="font-size: 0.8rem; color: #a78bfa; margin-top: 8px; text-align: center;">
-                        <i class="fa-solid fa-arrow-pointer"></i> 카드를 클릭하면 상세 페이지로 이동합니다.
-                    </p>
+                    
+                    <!-- 파티원 목록 영역 -->
+                    <div class="form-group">
+                         <div id="detailPartyListContainer"></div>
+                    </div>
                 </div>
                 
                 <div style="margin-top:20px; text-align:center;">
