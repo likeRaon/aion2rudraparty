@@ -1,8 +1,13 @@
 const API_BASE_URL = 'https://api.aon2.info/api/v1/aion2';
 const PROXY_URL = '';
 
-const WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4MjU4OTQ1MDg2NjY4OS9QazduSFUtRmlubTJGQmo1cTk3UF85YU5hNzhZU3ZTOGRaY2M4OGdQaVFTZ285RXhqOXU4aDQ1UlNpQ291QTJiUUVVRQ==';
-const DISCORD_WEBHOOK_URL = atob(WEBHOOK_SECRET);
+// 게시글 등록 알림(모집/구직)
+const POST_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU1OTI1NzA3ODk4ODgyMS81VDczT1VxWUxnZzFEYUs1Skk3M0R2OFpfYzdNVlBiajZXUkE0c3VyQ0paQ1ZXSW96T1Voel9rWDBhVEdiSkx3WkJLRg==';
+// 삭제 사유/오류 로그(감사용)
+const LOG_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4MjU4OTQ1MDg2NjY4OS9QazduSFUtRmlubTJGQmo1cTk3UF85YU5hNzhZU3ZTOGRaY2M4OGdQaVFTZ285RXhqOXU4aDQ1UlNpQ291QTJiUUVVRQ==';
+
+const DISCORD_POST_WEBHOOK_URL = atob(POST_WEBHOOK_SECRET);
+const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
 
 const DISCORD_ADMIN = {
 
@@ -58,6 +63,54 @@ async function logAuditEvent(eventType, payload = {}) {
     } catch (e) {
         console.error("audit 로그 기록 실패:", e);
     }
+}
+
+async function sendLogToDiscord(lines) {
+    if (!DISCORD_LOG_WEBHOOK_URL) return;
+    try {
+        const content = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
+        if (!content.trim()) return;
+
+        await fetch(`${DISCORD_LOG_WEBHOOK_URL}?wait=false`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+        });
+    } catch (e) {
+        console.error("로그 웹훅 전송 실패:", e);
+    }
+}
+
+function formatPostTypeLabel(type) {
+    if (type === 'party') return '📢 파티원 모집';
+    if (type === 'member') return '⚔️ 파티 구직';
+    if (type === 'notice') return '🔔 공지사항';
+    return '📝 게시글';
+}
+
+async function notifyDeletionToDiscord(postLike, reasonCode, reasonMessage) {
+    const p = postLike || {};
+    const title = p.title || '(제목 없음)';
+    const author = p.author?.name ? `${p.author.name}${p.author?.class ? ` (${p.author.class})` : ''}` : '(작성자 정보 없음)';
+    const createdAt = p.createdAt || null;
+    const postId = p.id || p.postId || null;
+
+    const lines = [
+        '🗑️ **게시글 삭제/정리 감지**',
+        '',
+        `- **유형**: ${formatPostTypeLabel(p.type)}`,
+        `- **제목**: ${title}`,
+        `- **작성자**: ${author}`,
+        createdAt ? `- **작성시간**: ${createdAt}` : null,
+        postId ? `- **postId**: ${postId}` : null,
+        '',
+        `- **사유코드**: ${reasonCode || 'unknown'}`,
+        `- **사유**: ${reasonMessage || ''}`,
+        '',
+        `- **처리자(현재 세션)**: ${currentUser?.name || 'unknown'}${currentUser?.isAdmin ? ' (admin)' : ''}`
+    ].filter(Boolean);
+
+    await sendLogToDiscord(lines);
 }
 
 function getDeleteActor() {
@@ -293,6 +346,8 @@ function setupRealtimeListener() {
                         postId: oldId,
                         previousData: oldData || null
                     });
+                    // 비정상(하드 삭제) 감지 로그를 디스코드에도 남김
+                    notifyDeletionToDiscord({ ...(oldData || {}), postId: oldId }, 'hard_delete_detected', '문서가 하드 삭제되어 스냅샷에서 사라짐');
                 }
             }
             lastSnapshotById = nextById;
@@ -310,6 +365,12 @@ function setupRealtimeListener() {
                 code: error?.code || null,
                 message: error?.message || String(error)
             });
+            sendLogToDiscord([
+                '⚠️ **Firestore 실시간 리스너 오류**',
+                '',
+                `- **code**: ${error?.code || ''}`,
+                `- **message**: ${error?.message || String(error)}`
+            ]);
         });
 }
 
@@ -1030,7 +1091,7 @@ function handlePostSubmit(e) {
 }
 
 function sendDiscordNotification(post) {
-    if (!DISCORD_WEBHOOK_URL || DISCORD_WEBHOOK_URL.includes('여기에')) return Promise.resolve(null);
+    if (!DISCORD_POST_WEBHOOK_URL || DISCORD_POST_WEBHOOK_URL.includes('여기에')) return Promise.resolve(null);
 
     let typeIcon = '📢';
     let typeText = '파티원 모집';
@@ -1084,7 +1145,7 @@ function sendDiscordNotification(post) {
         ]
     };
 
-    return fetch(`${DISCORD_WEBHOOK_URL}?wait=true`, {
+    return fetch(`${DISCORD_POST_WEBHOOK_URL}?wait=true`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -1098,9 +1159,10 @@ function sendDiscordNotification(post) {
 }
 
 function deleteDiscordMessage(post) {
-    if (!post.discordMessageId || !DISCORD_WEBHOOK_URL || DISCORD_WEBHOOK_URL.includes('여기에')) return;
+    // 게시글 등록 알림을 보낸 "등록용 웹훅"으로만 메시지 삭제 가능
+    if (!post.discordMessageId || !DISCORD_POST_WEBHOOK_URL || DISCORD_POST_WEBHOOK_URL.includes('여기에')) return;
 
-    fetch(`${DISCORD_WEBHOOK_URL}/messages/${post.discordMessageId}`, {
+    fetch(`${DISCORD_POST_WEBHOOK_URL}/messages/${post.discordMessageId}`, {
         method: 'DELETE'
     }).catch(err => {
         console.error('Discord Delete Error:', err);
@@ -1109,6 +1171,13 @@ function deleteDiscordMessage(post) {
             discordMessageId: post?.discordMessageId || null,
             error: String(err)
         });
+        sendLogToDiscord([
+            '⚠️ **디스코드 등록 알림 메시지 삭제 실패**',
+            '',
+            `- **postId**: ${post?.id || ''}`,
+            `- **discordMessageId**: ${post?.discordMessageId || ''}`,
+            `- **error**: ${String(err)}`
+        ]);
     });
 }
 
@@ -1139,6 +1208,7 @@ function checkExpiredPosts() {
                 .then(() => {
                     deleteDiscordMessage(post);
                     db.collection("posts").doc(post.id).update({ discordMessageId: null }).catch(() => {});
+                    notifyDeletionToDiscord({ ...post, id: post.id }, 'expired', '유효기간 만료로 자동 삭제');
                 })
                 .catch(err => {
                     console.error("만료 삭제 오류:", err);
@@ -1400,6 +1470,7 @@ function deleteNotice(notice) {
         softDeletePostById(notice.id, 'notice_deleted', '관리자에 의해 공지사항 삭제')
             .then(() => {
                 showToast("공지사항이 삭제되었습니다.");
+                notifyDeletionToDiscord({ ...notice, id: notice.id }, 'notice_deleted', '관리자에 의해 공지사항 삭제');
             })
             .catch(err => {
                 console.error("공지 삭제 실패:", err);
@@ -1756,6 +1827,7 @@ function deletePost() {
                 if (post) db.collection("posts").doc(post.id).update({ discordMessageId: null }).catch(() => {});
                 elements.manageModal.classList.add('hidden');
                 showToast("게시글이 삭제되었습니다.");
+                notifyDeletionToDiscord({ ...(post || {}), id: currentEditingPostId }, 'manual_delete', '작성자/관리자 수동 삭제');
             })
             .catch(err => {
                 console.error("삭제 실패", err);
