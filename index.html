@@ -11,15 +11,26 @@
     <div class="app-container">
         <!-- 1. 헤더 (전체 너비 최상단 고정) -->
         <header>
-            <div class="logo">
-                <i class="fa-solid fa-dragon"></i>
-                <h1>전투&amp;명가 파티 매칭</h1>
-                <i class="fa-regular fa-circle-question" id="guideBtn" style="font-size: 1.2rem; cursor: pointer; color: var(--text-sub); margin-left: 8px;"></i>
-            </div>
-            <div class="user-menu">
+            <div class="header-content">
+                <div class="logo-area">
+                    <a href="#" class="logo" onclick="location.reload(); return false;">
+                        <i class="fa-solid fa-dragon"></i>
+                        <h1>전투&amp;명가</h1>
+                    </a>
+                    <i class="fa-regular fa-circle-question" id="guideBtn"></i>
+                </div>
+
+                <div class="search-bar">
+                    <input type="text" id="headerSearchInput" placeholder="캐릭터 닉네임 검색">
+                    <button id="headerSearchBtn"><i class="fa-solid fa-magnifying-glass"></i></button>
+                </div>
+
+                <div class="user-menu">
                 <button id="loginBtn" class="btn-outline">로그인</button>
                 <div id="userInfo" class="hidden" style="display: flex; align-items: center; gap: 10px;">
                     <span id="userNickname" style="font-weight: 700;"></span>
+                    <span id="adminBadge" class="hidden" style="padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; background: rgba(34, 197, 94, 0.14); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3);">관리자</span>
+                    <button id="adminVerifyBtn" class="btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">어드민 인증</button>
                     <button id="logoutBtn" class="btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">로그아웃</button>
                 </div>
             </div>
@@ -346,6 +357,122 @@
                 <div style="margin-top:20px; text-align:center;">
                     <a id="detailLink" href="#" target="_blank" class="btn-primary full-width hidden" style="display:inline-block; text-decoration:none;">오픈채팅/디스코드 참여</a>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 캐릭터 검색 결과 모달 -->
+    <div id="searchResultModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>캐릭터 검색 결과</h3>
+                <button class="close-btn search-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="searchResultContent">
+                    <!-- JS로 채워짐 -->
+                </div>
+                <div style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
+                     <button id="openCalculatorBtn" class="btn-success full-width">
+                        <i class="fa-solid fa-calculator"></i> 전투력(DPS) 시뮬레이터
+                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DPS 시뮬레이터 모달 -->
+    <div id="dpsCalculatorModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3>전투력(DPS) 시뮬레이터</h3>
+                <button class="close-btn calc-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size: 0.85rem; color: var(--text-sub); margin-bottom: 20px; background: rgba(30,30,40,0.5); padding: 10px; border-radius: 8px;">
+                    <i class="fa-solid fa-circle-info"></i> 캐릭터 검색 후 스탯을 불러오거나 직접 입력하여 예상 전투력을 계산해보세요.<br>
+                    (아툴 공식 기준 계산식이며, 실제 인게임과는 차이가 있을 수 있습니다.)
+                </p>
+                <button id="calcAtulBtn" class="btn-outline full-width" style="margin-top:-10px; margin-bottom: 20px;">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i> 아툴 바로가기
+                </button>
+
+                <div class="calculator-grid">
+                    <!-- 기본 스탯 -->
+                    <div class="calc-section">
+                        <h4>기본 스탯</h4>
+                        <div class="form-group-row">
+                            <label>공격력</label>
+                            <input type="number" id="calcAttackPower" placeholder="0">
+                        </div>
+                        <div class="form-group-row">
+                            <label>무기 최소공격력</label>
+                            <input type="number" id="calcWeaponMin" placeholder="0">
+                        </div>
+                        <div class="form-group-row">
+                            <label>무기 최대공격력</label>
+                            <input type="number" id="calcWeaponMax" placeholder="0">
+                        </div>
+                        <div class="form-group-row">
+                            <label style="display:flex; align-items:center; gap:6px;">
+                                치명타 수치
+                                <span class="tooltip-icon" data-tooltip="아툴 내에 치명타 i 아이콘을 눌러 % 수치가 아닌 합계 수치를 입력해 주세요.">
+                                    <i class="fa-solid fa-circle-info"></i>
+                                </span>
+                            </label>
+                            <input type="number" id="calcCritStat" placeholder="0">
+                        </div>
+                    </div>
+
+                    <!-- 퍼센트 스탯 -->
+                    <div class="calc-section">
+                        <h4>증폭/추가 (%)</h4>
+                        <div class="form-group-row">
+                            <label>전투 속도</label>
+                            <input type="number" id="calcCombatSpeed" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>무기 피해 증폭</label>
+                            <input type="number" id="calcWeaponDamageAmp" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>피해 증폭 (통합)</label>
+                            <input type="number" id="calcDamageAmp" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>치명타 피해 증폭</label>
+                            <input type="number" id="calcCritDamageAmp" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>스킬 피해 증폭</label>
+                            <input type="number" id="calcSkillDamage" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>재사용 대기시간 감소</label>
+                            <input type="number" id="calcCooldownReduction" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>강타 적중</label>
+                            <input type="number" id="calcStunHit" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>완벽</label>
+                            <input type="number" id="calcPerfect" placeholder="0" step="0.1">
+                        </div>
+                        <div class="form-group-row">
+                            <label>다단 히트 적중</label>
+                            <input type="number" id="calcMultiHit" placeholder="0" step="0.1">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="result-area" style="margin-top: 20px; padding: 20px; background: var(--bg-hover); border-radius: 12px; text-align: center; border: 1px solid var(--primary);">
+                    <div style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 5px;">예상 아툴 전투력</div>
+                    <div id="calcResultScore" style="font-size: 2rem; font-weight: 700; color: var(--primary-light); font-family: 'Cafe24Ssurround';">0</div>
+                    <div id="calcDiff" style="font-size: 0.9rem; color: var(--danger); font-weight: 700; height: 20px;"></div>
+                </div>
+
+                <button id="doCalculateBtn" class="btn-primary full-width" style="margin-top: 20px;">계산하기</button>
             </div>
         </div>
     </div>

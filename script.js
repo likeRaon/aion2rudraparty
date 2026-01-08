@@ -4,6 +4,17 @@ const PROXY_URL = '';
 const WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU1OTI1NzA3ODk4ODgyMS81VDczT1VxWUxnZzFEYUs1Skk3M0R2OFpfYzdNVlBiajZXUkE0c3VyQ0paQ1ZXSW96T1Voel9rWDBhVEdiSkx3WkJLRg==';
 const DISCORD_WEBHOOK_URL = atob(WEBHOOK_SECRET);
 
+const DISCORD_ADMIN = {
+    // Discord Developer Portal -> OAuth2 -> Client ID
+    // (기존에 사용 중이던 봇 애플리케이션의 Client ID를 그대로 써도 됩니다)
+    clientId: '1440197568847151214',
+    guildId: '1427195769793937428',
+    roleId: '1427200649971372052',
+    scopes: ['identify', 'guilds.members.read'],
+    // Cloudflare Worker URL (예: https://xxxx.workers.dev/)
+    verifyEndpoint: 'https://frosty-tooth-60e.k47m31s.workers.dev/'
+};
+
 const CONSTANTS = {
     DEFAULT_EXPIRATION_MS: 3 * 60 * 60 * 1000,
     NOTICE_LIMIT: 3
@@ -33,6 +44,63 @@ let currentEditingPostId = null;
 let isNoticeWritingMode = false; 
 let isEditMode = false; // 글 수정 모드 여부
 let editingPostData = null; // 수정 중인 글 데이터
+let currentCalcData = null; // 현재 계산기용 데이터
+let lastSimulatedScore = null; // 시뮬레이터 직전 계산값(변화량 표시용)
+
+function normalizeScoreInfoStats(detailData) {
+    const list = detailData?.scoreInfo?.stats?.stats;
+    if (!Array.isArray(list)) return null;
+
+    const map = {};
+    list.forEach(s => {
+        if (!s || typeof s !== 'object') return;
+        if (!s.id) return;
+        map[s.id] = s.value || s.percent || null;
+        map[`${s.id}__raw`] = s;
+    });
+
+    const getPercent = (id) => {
+        const raw = map[`${id}__raw`];
+        const p = raw?.value?.percent ?? raw?.percent;
+        return Number.isFinite(p) ? p : 0;
+    };
+    const getValue = (id) => {
+        const raw = map[`${id}__raw`];
+        const v = raw?.value?.value ?? raw?.value;
+        return Number.isFinite(v) ? v : 0;
+    };
+
+    return {
+        attackPower: getValue('attackPower'),
+        combatSpeed: getPercent('combatSpeed'),
+        weaponDamageAmp: getPercent('weaponDamage'),
+        damageAmp: getPercent('damage'),
+        criticalDamageAmp: getPercent('criticalDamage'),
+        cooldownReduction: getPercent('cooldown'),
+        stunHit: getPercent('powerStrike'),
+        perfect: getPercent('perfection'),
+        multiHit: getPercent('multiHit'),
+        criticalHit: getValue('critical')
+    };
+}
+
+function extractWeaponMinMaxFromItemDetails(detailData) {
+    const items = detailData?.itemDetails;
+    if (!Array.isArray(items)) return { weaponMinAttack: 0, weaponMaxAttack: 0 };
+
+    for (const it of items) {
+        const mainStats = it?.mainStats;
+        if (!Array.isArray(mainStats)) continue;
+        for (const ms of mainStats) {
+            if (ms?.id === 'WeaponFixingDamage') {
+                const min = Number.isFinite(ms?.minValue) ? ms.minValue : 0;
+                const max = Number.isFinite(ms?.maxValue) ? ms.maxValue : 0;
+                return { weaponMinAttack: min, weaponMaxAttack: max };
+            }
+        }
+    }
+    return { weaponMinAttack: 0, weaponMaxAttack: 0 };
+}
 
 const categoryData = {
     "정복": {
@@ -101,6 +169,8 @@ const elements = {
     userInfo: document.getElementById('userInfo'),
     userNickname: document.getElementById('userNickname'),
     logoutBtn: document.getElementById('logoutBtn'),
+    adminVerifyBtn: document.getElementById('adminVerifyBtn'),
+    adminBadge: document.getElementById('adminBadge'),
     authNickname: document.getElementById('authNickname'),
     manageModal: document.getElementById('manageModal'),
     manageCloseBtn: document.querySelector('.manage-close'),
@@ -127,11 +197,41 @@ const elements = {
     guideBtn: document.getElementById('guideBtn'),
     guideModal: document.getElementById('guideModal'),
     guideCloseBtn: document.querySelector('.guide-close'),
-    toastContainer: document.getElementById('toastContainer')
+    toastContainer: document.getElementById('toastContainer'),
+    
+    // 검색 관련 요소
+    headerSearchInput: document.getElementById('headerSearchInput'),
+    headerSearchBtn: document.getElementById('headerSearchBtn'),
+    searchResultModal: document.getElementById('searchResultModal'),
+    searchCloseBtn: document.querySelector('.search-close'),
+    searchResultContent: document.getElementById('searchResultContent'),
+    openCalculatorBtn: document.getElementById('openCalculatorBtn'),
+    
+    // 계산기 관련 요소
+    dpsCalculatorModal: document.getElementById('dpsCalculatorModal'),
+    calcCloseBtn: document.querySelector('.calc-close'),
+    doCalculateBtn: document.getElementById('doCalculateBtn'),
+    calcAttackPower: document.getElementById('calcAttackPower'),
+    calcWeaponMin: document.getElementById('calcWeaponMin'),
+    calcWeaponMax: document.getElementById('calcWeaponMax'),
+    calcCritStat: document.getElementById('calcCritStat'),
+    calcCombatSpeed: document.getElementById('calcCombatSpeed'),
+    calcWeaponDamageAmp: document.getElementById('calcWeaponDamageAmp'),
+    calcDamageAmp: document.getElementById('calcDamageAmp'),
+    calcCritDamageAmp: document.getElementById('calcCritDamageAmp'),
+    calcSkillDamage: document.getElementById('calcSkillDamage'),
+    calcCooldownReduction: document.getElementById('calcCooldownReduction'),
+    calcStunHit: document.getElementById('calcStunHit'),
+    calcPerfect: document.getElementById('calcPerfect'),
+    calcMultiHit: document.getElementById('calcMultiHit'),
+    calcResultScore: document.getElementById('calcResultScore'),
+    calcDiff: document.getElementById('calcDiff'),
+    calcAtulBtn: document.getElementById('calcAtulBtn')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
     loadUser();
+    handleDiscordAdminCallback();
     setupRealtimeListener();
     setupEventListeners();
 });
@@ -184,6 +284,10 @@ function setupEventListeners() {
     });
 
     elements.logoutBtn.addEventListener('click', logout);
+
+    if (elements.adminVerifyBtn) {
+        elements.adminVerifyBtn.addEventListener('click', beginDiscordAdminVerify);
+    }
 
     // 일반 글쓰기 버튼
     elements.writeBtn.addEventListener('click', () => {
@@ -277,13 +381,316 @@ function setupEventListeners() {
         elements.loadMoreNoticeBtn.classList.add('hidden');
     });
 
+    // 헤더 캐릭터 검색 이벤트
+    elements.headerSearchBtn.addEventListener('click', handleHeaderSearch);
+    elements.headerSearchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') handleHeaderSearch();
+    });
+
+    elements.searchCloseBtn.addEventListener('click', () => {
+        elements.searchResultModal.classList.add('hidden');
+    });
+    
+    // 계산기 관련 이벤트
+    if (elements.openCalculatorBtn) {
+        elements.openCalculatorBtn.addEventListener('click', () => {
+            // 처음 열 때 변화량은 0으로 시작
+            lastSimulatedScore = null;
+            if (elements.calcDiff) {
+                elements.calcDiff.textContent = '(0)';
+                elements.calcDiff.style.color = 'var(--text-muted)';
+            }
+            if (currentCalcData) {
+                fillCalculator(currentCalcData);
+            }
+            elements.dpsCalculatorModal.classList.remove('hidden');
+        });
+    }
+
+    if (elements.calcCloseBtn) {
+        elements.calcCloseBtn.addEventListener('click', () => {
+            elements.dpsCalculatorModal.classList.add('hidden');
+        });
+    }
+
+    if (elements.doCalculateBtn) {
+        elements.doCalculateBtn.addEventListener('click', calculateEstimatedDps);
+    }
+
+    if (elements.calcAtulBtn) {
+        elements.calcAtulBtn.addEventListener('click', () => {
+            if (!currentCalcData?.name) {
+                alert('먼저 캐릭터를 검색해주세요.');
+                return;
+            }
+            openAtulPage(currentCalcData.name);
+        });
+    }
+
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal')) {
             if (e.target.id === 'writeModal') return;
+            if (e.target.id === 'dpsCalculatorModal') return;
+            if (e.target.id === 'searchResultModal') return;
             e.target.classList.add('hidden');
         }
     });
+
+    // 툴팁(모달 overflow에 안 잘리도록 body에 고정 툴팁으로 표시)
+    setupGlobalTooltips();
 }
+
+function setupGlobalTooltips() {
+    let tooltip = document.getElementById('globalTooltip');
+    if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.id = 'globalTooltip';
+        tooltip.className = 'global-tooltip';
+        document.body.appendChild(tooltip);
+    }
+
+    const icons = document.querySelectorAll('.tooltip-icon[data-tooltip]');
+    icons.forEach(icon => {
+        icon.addEventListener('mouseenter', () => {
+            const text = icon.getAttribute('data-tooltip') || '';
+            if (!text) return;
+            tooltip.textContent = text;
+            tooltip.classList.add('show');
+
+            const rect = icon.getBoundingClientRect();
+            const padding = 12;
+            const tooltipRect = tooltip.getBoundingClientRect();
+
+            // 기본: 아이콘 중앙 위
+            let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+            let top = rect.top - tooltipRect.height - 10;
+
+            // 좌/우 화면 밖으로 나가면 보정
+            left = Math.max(padding, Math.min(left, window.innerWidth - tooltipRect.width - padding));
+
+            // 위가 부족하면 아래로
+            if (top < padding) {
+                top = rect.bottom + 10;
+            }
+
+            tooltip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+        });
+
+        icon.addEventListener('mouseleave', () => {
+            tooltip.classList.remove('show');
+            tooltip.style.transform = 'translate(-9999px, -9999px)';
+        });
+    });
+}
+
+// 헤더 검색 핸들러
+async function handleHeaderSearch() {
+    const nickname = elements.headerSearchInput.value.trim();
+    if (!nickname) {
+        alert('닉네임을 입력해주세요.');
+        return;
+    }
+
+    // 버튼 로딩 상태
+    const originalBtnText = elements.headerSearchBtn.innerHTML;
+    elements.headerSearchBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+    elements.headerSearchBtn.disabled = true;
+
+    try {
+        const charData = await fetchCharacterData(nickname);
+        currentCalcData = charData; // 계산기용 데이터 저장
+        
+        if (charData) {
+            // 검색 성공 -> 모달에 표시
+            elements.searchResultContent.innerHTML = `
+                <div class="search-profile">
+                    <img src="${charData.profile_img || 'https://via.placeholder.com/100'}" class="search-avatar">
+                    <div class="search-name">${charData.name}</div>
+                    <div class="search-class">${charData.class} (Lv.${charData.level})</div>
+                </div>
+                
+                <div class="score-box-container">
+                    <div class="score-box">
+                        <div class="score-label">아온 점수</div>
+                        <div class="score-value">${Math.floor(charData.aonScore || 0).toLocaleString()}</div>
+                    </div>
+                    <div class="score-box">
+                        <div class="score-label">아툴 전투력</div>
+                        <div class="score-value">${(charData.combatScore || 0).toLocaleString()}</div>
+                        <div class="score-sub">※ 실제 아툴과<p> 상이할 수 있습니다.</div>
+                    </div>
+                </div>
+
+                <div style="margin-top:20px; text-align:center;">
+                     <button class="btn-outline full-width" onclick="window.open('https://www.aion2tool.com/char/serverid=2002/${encodeURIComponent(nickname)}', '_blank')">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> 아툴에서 자세히 보기
+                     </button>
+                </div>
+            `;
+            elements.searchResultModal.classList.remove('hidden');
+            
+            // 계산기 버튼 활성화 (DOM이 생성된 후일 수 있으므로 다시 바인딩 필요할 수도 있으나, 이미 static HTML에 있으므로 괜찮음)
+            elements.openCalculatorBtn.classList.remove('hidden');
+            
+        } else {
+            alert('캐릭터를 찾을 수 없습니다.');
+            elements.openCalculatorBtn.classList.add('hidden');
+        }
+    } catch (err) {
+        console.error(err);
+        alert('검색 중 오류가 발생했습니다.');
+    } finally {
+        elements.headerSearchBtn.innerHTML = originalBtnText;
+        elements.headerSearchBtn.disabled = false;
+        elements.headerSearchInput.value = '';
+    }
+}
+
+// 계산기 데이터 채우기
+function fillCalculator(data) {
+    if (!data) return;
+    const s = data.calcStats;
+    if (!s) {
+        showToast(`<i class="fa-solid fa-circle-info"></i> AON API에서 세부 스탯 자동 불러오기를 할 수 없어, 직접 입력이 필요합니다.`);
+        return;
+    }
+
+    elements.calcAttackPower.value = s.attackPower || 0;
+    elements.calcWeaponMin.value = s.weaponMinAttack || 0;
+    elements.calcWeaponMax.value = s.weaponMaxAttack || 0;
+    elements.calcCritStat.value = s.criticalHit || 0;
+
+    elements.calcCombatSpeed.value = s.combatSpeed || 0;
+    elements.calcWeaponDamageAmp.value = s.weaponDamageAmp || 0;
+    elements.calcDamageAmp.value = s.damageAmp || 0;
+    elements.calcCritDamageAmp.value = s.criticalDamageAmp || 0;
+    elements.calcSkillDamage.value = s.skillDamage || 0;
+    elements.calcCooldownReduction.value = s.cooldownReduction || 0;
+    elements.calcStunHit.value = s.stunHit || 0;
+    elements.calcPerfect.value = s.perfect || 0;
+    elements.calcMultiHit.value = s.multiHit || 0;
+    
+    // 초기 계산 실행
+    calculateEstimatedDps();
+}
+
+function convertCritStatToChance(critStat) {
+    // 스탯 × 0.7 / 10 = 확률%
+    return (critStat * 0.7) / 10;
+}
+
+// DPS 계산 로직
+function calculateEstimatedDps() {
+    const attackPower = parseFloat(elements.calcAttackPower.value) || 0;
+    const weaponMin = parseFloat(elements.calcWeaponMin.value) || 0;
+    const weaponMax = parseFloat(elements.calcWeaponMax.value) || 0;
+    const critStat = parseFloat(elements.calcCritStat.value) || 0;
+    
+    const combatSpeed = parseFloat(elements.calcCombatSpeed.value) || 0;
+    const weaponDamageAmp = parseFloat(elements.calcWeaponDamageAmp.value) || 0;
+    const damageAmp = parseFloat(elements.calcDamageAmp.value) || 0;
+    const critDamageAmp = parseFloat(elements.calcCritDamageAmp.value) || 0;
+    const skillDamage = parseFloat(elements.calcSkillDamage.value) || 0;
+    const cooldownReduction = parseFloat(elements.calcCooldownReduction.value) || 0;
+    const stunHit = parseFloat(elements.calcStunHit.value) || 0;
+    const perfect = parseFloat(elements.calcPerfect.value) || 0;
+    const multiHit = parseFloat(elements.calcMultiHit.value) || 0;
+
+    let damageIncreaseValues = {};
+
+    // 1. 전투 속도
+    if (combatSpeed > 0) damageIncreaseValues.combatSpeed = combatSpeed;
+
+    // 2. 무기 피해 증폭 (계수 0.66)
+    if (weaponDamageAmp > 0) damageIncreaseValues.weaponDamageAmp = weaponDamageAmp * 0.66;
+
+    // 3. 피해 증폭 (통합)
+    if (damageAmp > 0) damageIncreaseValues.damageAmp = damageAmp;
+
+    // 4. 치명타 피해 증폭
+    const criticalChance = convertCritStatToChance(critStat);
+    let adjustedAttackPower = attackPower;
+    
+    // (옵션) 검은 파편의 날개 효과: 치명타 공격력 추가 (95 * 치명타 확률%) - 여기선 생략하거나 기본값 적용 고려
+    // adjustedAttackPower += 95 * (criticalChance / 100); 
+
+    if (critDamageAmp > 0 && criticalChance > 0) {
+        const BASE_CRITICAL_DAMAGE = 1.5;
+        const amplifiedCriticalDamage = BASE_CRITICAL_DAMAGE + (critDamageAmp / 100);
+        const p = criticalChance / 100;
+        const baseExpectedDamage = (1 - p) * 1 + p * BASE_CRITICAL_DAMAGE;
+        const amplifiedExpectedDamage = (1 - p) * 1 + p * amplifiedCriticalDamage;
+        const damageIncrease = ((amplifiedExpectedDamage / baseExpectedDamage) - 1) * 100;
+        damageIncreaseValues.criticalDamageAmp = damageIncrease;
+    }
+
+    // 5. 스킬 피해 증폭
+    if (skillDamage > 0) damageIncreaseValues.skillDamage = skillDamage;
+
+    // 6. 재사용 대기 시간 감소
+    if (cooldownReduction > 0) {
+        const COOLDOWN_EFFICIENCY = 0.5;
+        const cooldownMultiplier = 100 / (100 - cooldownReduction);
+        const theoreticalDamageIncrease = (cooldownMultiplier - 1) * 100;
+        const actualDamageIncrease = theoreticalDamageIncrease * COOLDOWN_EFFICIENCY;
+        damageIncreaseValues.cooldownReduction = actualDamageIncrease;
+    }
+
+    // 7. 강타
+    if (stunHit > 0) damageIncreaseValues.stunHit = stunHit;
+
+    // 8. 완벽
+    if (perfect > 0 && weaponMin > 0 && weaponMax > 0 && weaponMax > weaponMin) {
+        const damageIncrease = perfect * ((weaponMax - weaponMin) / (weaponMax + weaponMin));
+        damageIncreaseValues.perfect = damageIncrease;
+    }
+
+    // 9. 다단 히트 적중
+    if (multiHit > 0) {
+        const baseMultiHitPercent = 18;
+        const totalMultiHitPercent = baseMultiHitPercent + multiHit;
+        
+        const f = (x) => 11.1 * x + 13.9 * Math.pow(x, 2) + 17.8 * Math.pow(x, 3) + 23.9 * Math.pow(x, 4);
+        
+        const baseDamageIncrease = f(baseMultiHitPercent / 100);
+        const totalDamageIncrease = f(totalMultiHitPercent / 100);
+        
+        const baseMultiplier = 1 + baseDamageIncrease / 100;
+        const totalMultiplier = 1 + totalDamageIncrease / 100;
+        const actualDamageIncrease = ((totalMultiplier / baseMultiplier) - 1) * 100;
+        
+        damageIncreaseValues.multiHit = actualDamageIncrease;
+    }
+
+    // 최종 계산
+    let totalMultiplier = 1.0;
+    for (const key in damageIncreaseValues) {
+        totalMultiplier *= (1 + damageIncreaseValues[key] / 100);
+    }
+
+    const finalCombatScore = adjustedAttackPower * totalMultiplier;
+    const score = Math.round(finalCombatScore);
+    
+    elements.calcResultScore.textContent = score.toLocaleString();
+    
+    // 변화량 표시: 이전 계산값 대비 현재 계산값
+    if (elements.calcDiff) {
+        if (lastSimulatedScore === null || !Number.isFinite(lastSimulatedScore)) {
+            lastSimulatedScore = score;
+            elements.calcDiff.textContent = '(0)';
+            elements.calcDiff.style.color = 'var(--text-muted)';
+            return;
+        }
+
+        const diff = score - lastSimulatedScore;
+        lastSimulatedScore = score;
+
+        const sign = diff > 0 ? '+' : '';
+        elements.calcDiff.textContent = `(${sign}${diff.toLocaleString()})`;
+        elements.calcDiff.style.color = diff > 0 ? 'var(--success)' : (diff < 0 ? 'var(--danger)' : 'var(--text-muted)');
+    }
+}
+
 
 // 글쓰기 모달 열기
 function openWriteModal(isNotice, editPost = null) {
@@ -349,6 +756,16 @@ function loadUser() {
     const savedUser = localStorage.getItem('rudra_user');
     if (savedUser) {
         currentUser = JSON.parse(savedUser);
+        if (currentUser) {
+            if (typeof currentUser.isAdmin !== 'boolean') currentUser.isAdmin = false;
+
+            // 기존 닉네임 기반 어드민/구버전 데이터 차단: Discord 인증으로만 관리자 유지
+            if (currentUser.isAdmin && currentUser.adminAuth?.provider !== 'discord') {
+                currentUser.isAdmin = false;
+                delete currentUser.adminAuth;
+                localStorage.setItem('rudra_user', JSON.stringify(currentUser));
+            }
+        }
         updateUserUI();
     }
 }
@@ -363,7 +780,8 @@ function login(nickname) {
                 itemLevel: data.item_level,
                 dps: data.dps,
                 avatar: data.profile_img,
-                verified: true
+                verified: true,
+                isAdmin: false
             };
         } else {
             currentUser = {
@@ -373,17 +791,14 @@ function login(nickname) {
                 itemLevel: 0,
                 dps: 0,
                 avatar: null,
-                verified: false
+                verified: false,
+                isAdmin: false
             };
         }
         
         const savedUser = JSON.parse(localStorage.getItem('rudra_user') || '{}');
         if (savedUser && savedUser.name === currentUser.name && savedUser.dps) {
             currentUser.dps = savedUser.dps;
-        }
-
-        if (nickname === '근접(어드민)') {
-            currentUser.isAdmin = true;
         }
 
         localStorage.setItem('rudra_user', JSON.stringify(currentUser));
@@ -404,6 +819,14 @@ function updateUserUI() {
         elements.userInfo.classList.remove('hidden');
         elements.userNickname.textContent = currentUser.name;
 
+        if (elements.adminBadge) {
+            elements.adminBadge.classList.toggle('hidden', !currentUser.isAdmin);
+        }
+
+        if (elements.adminVerifyBtn) {
+            elements.adminVerifyBtn.classList.toggle('hidden', !!currentUser.isAdmin);
+        }
+
         // 관리자인 경우 공지 작성 버튼 표시
         if (currentUser.isAdmin) {
             elements.writeNoticeBtn.classList.remove('hidden');
@@ -414,6 +837,8 @@ function updateUserUI() {
         elements.loginBtn.classList.remove('hidden');
         elements.userInfo.classList.add('hidden');
         elements.writeNoticeBtn.classList.add('hidden');
+        if (elements.adminVerifyBtn) elements.adminVerifyBtn.classList.add('hidden');
+        if (elements.adminBadge) elements.adminBadge.classList.add('hidden');
     }
 }
 
@@ -448,7 +873,7 @@ function handlePostSubmit(e) {
     if (isNoticeWritingMode) {
         // 공지 작성 데이터 처리
         postType = 'notice';
-        expirationMs = 0; 
+        expirationMs = 0; // 공지사항은 영구 보존 (자동 삭제 안 함)
         // 공지는 필수 필드 최소화
     } else {
         // 일반 글쓰기 데이터 처리
@@ -507,6 +932,10 @@ function handlePostSubmit(e) {
         }];
         postData.author = { ...currentUser, dps: myDps };
     } else {
+        // 수정 모드: 공지사항이면 expirationTime은 항상 0으로 유지
+        if (editingPostData && editingPostData.type === 'notice') {
+            postData.expirationTime = 0;
+        }
     }
     
     if (isEditMode && editingPostData) {
@@ -624,7 +1053,13 @@ function checkExpiredPosts() {
     let expiredCount = 0;
 
     posts.forEach(post => {
+        // 공지사항은 영구 보존 (관리자가 직접 삭제할 때만 삭제됨)
         if (post.type === 'notice') return;
+        
+        // 매칭 완료된 게시글은 자동 삭제 안 함 (관리자가 직접 삭제할 때만 삭제됨)
+        if (post.status === 'full') return;
+        
+        // expirationTime이 0이면 자동 삭제 안 함 (유지)
         if (post.expirationTime === 0) return;
 
         const expirationMs = post.expirationTime || CONSTANTS.DEFAULT_EXPIRATION_MS;
@@ -662,6 +1097,156 @@ function showToast(message, duration = 4000) {
             toast.remove();
         });
     }, duration);
+}
+
+function getDiscordRedirectUri() {
+    return `${location.origin}${location.pathname}`;
+}
+
+function base64UrlEncodeArrayBuffer(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+async function sha256Base64Url(str) {
+    const data = new TextEncoder().encode(str);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return base64UrlEncodeArrayBuffer(digest);
+}
+
+function randomString(len = 64) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+    const bytes = new Uint8Array(len);
+    crypto.getRandomValues(bytes);
+    let out = '';
+    for (let i = 0; i < bytes.length; i++) out += chars[bytes[i] % chars.length];
+    return out;
+}
+
+async function beginDiscordAdminVerify() {
+    if (!currentUser) {
+        showToast('닉네임 로그인 후 어드민 인증을 진행해 주세요.');
+        return;
+    }
+
+    if (location.protocol === 'file:') {
+        alert('로컬 파일(file://)로 열면 Discord redirect_uri가 file://로 잡혀 인증이 실패합니다.\n\n- GitHub Pages 주소로 접속해서 시도하거나\n- 로컬 서버(http://localhost)로 실행해 주세요.');
+        return;
+    }
+
+    if (!DISCORD_ADMIN.clientId || DISCORD_ADMIN.clientId.includes('PUT_DISCORD_OAUTH_CLIENT_ID_HERE')) {
+        alert('DISCORD_ADMIN.clientId 설정이 필요합니다. Discord 개발자 포털에서 OAuth2 Client ID를 넣어주세요.');
+        return;
+    }
+
+    const state = randomString(32);
+    const verifier = randomString(64);
+    const challenge = await sha256Base64Url(verifier);
+
+    sessionStorage.setItem('discord_admin_state', state);
+    sessionStorage.setItem('discord_admin_verifier', verifier);
+
+    const params = new URLSearchParams({
+        client_id: DISCORD_ADMIN.clientId,
+        redirect_uri: getDiscordRedirectUri(),
+        response_type: 'code',
+        scope: DISCORD_ADMIN.scopes.join(' '),
+        state,
+        code_challenge: challenge,
+        code_challenge_method: 'S256'
+    });
+
+    location.href = `https://discord.com/oauth2/authorize?${params.toString()}`;
+}
+
+async function handleDiscordAdminCallback() {
+    const url = new URL(location.href);
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+    const error = url.searchParams.get('error');
+
+    if (!code && !error) return;
+
+    url.searchParams.delete('code');
+    url.searchParams.delete('state');
+    url.searchParams.delete('error');
+    url.searchParams.delete('error_description');
+    history.replaceState({}, document.title, url.toString());
+
+    if (error) {
+        showToast('디스코드 인증이 취소되었거나 실패했습니다.');
+        return;
+    }
+
+    if (!currentUser) {
+        showToast('닉네임 로그인 후 다시 어드민 인증을 진행해 주세요.');
+        return;
+    }
+
+    const savedState = sessionStorage.getItem('discord_admin_state');
+    const verifier = sessionStorage.getItem('discord_admin_verifier');
+
+    sessionStorage.removeItem('discord_admin_state');
+    sessionStorage.removeItem('discord_admin_verifier');
+
+    if (!savedState || !verifier || !state || savedState !== state) {
+        showToast('디스코드 인증 상태값이 일치하지 않습니다. 다시 시도해 주세요.');
+        return;
+    }
+
+    try {
+        const result = await verifyDiscordAdminViaWorker({
+            code,
+            codeVerifier: verifier,
+            redirectUri: getDiscordRedirectUri()
+        });
+
+        if (!result?.ok) {
+            showToast(result?.message || '어드민 권한이 없습니다.');
+            return;
+        }
+
+        currentUser.isAdmin = true;
+        currentUser.adminAuth = {
+            provider: 'discord',
+            discordUserId: result.discordUser?.id || '',
+            discordUsername: result.discordUser?.username || '',
+            verifiedAt: new Date().toISOString(),
+            guildId: DISCORD_ADMIN.guildId,
+            roleId: DISCORD_ADMIN.roleId
+        };
+
+        localStorage.setItem('rudra_user', JSON.stringify(currentUser));
+        updateUserUI();
+        showToast('어드민 인증 완료!');
+    } catch (e) {
+        console.error(e);
+        showToast('디스코드 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+}
+
+async function verifyDiscordAdminViaWorker(payload) {
+    if (!DISCORD_ADMIN.verifyEndpoint || DISCORD_ADMIN.verifyEndpoint.includes('PUT_CLOUDFLARE_WORKER_VERIFY_URL_HERE')) {
+        throw new Error('DISCORD_ADMIN.verifyEndpoint 설정이 필요합니다.');
+    }
+
+    const res = await fetch(DISCORD_ADMIN.verifyEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            code: payload.code,
+            codeVerifier: payload.codeVerifier,
+            redirectUri: payload.redirectUri,
+            guildId: DISCORD_ADMIN.guildId,
+            roleId: DISCORD_ADMIN.roleId
+        })
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || `verify failed: ${res.status}`);
+    return data;
 }
 
 // 좌측 배너용 공지사항 렌더링
@@ -1114,10 +1699,22 @@ async function fetchCharacterData(nickname) {
         
         const data = detailJson.data;
 
+        // DPS(전투력) 우선순위 로직 수정
         let dps = 0;
-        if (data.combatPoint) dps = data.combatPoint;
+        if (data.combatScore) dps = data.combatScore;
+        else if (data.combatPoint) dps = data.combatPoint;
         else if (data.stats && data.stats.combatPower) dps = data.stats.combatPower;
         else dps = data.totalItemLevel;
+
+        // 계산기용 스탯: AON의 scoreInfo.stats.stats가 실제 전투력 계산용 요약 스탯을 제공
+        const calcStatsBase = normalizeScoreInfoStats(data);
+        const weaponMinMax = extractWeaponMinMaxFromItemDetails(data);
+        const calcStats = calcStatsBase ? {
+            ...calcStatsBase,
+            ...weaponMinMax,
+            // scoreInfo에는 스킬 딜증이 별도 항목으로 없을 수 있어 기본 0 (사용자 입력 필요)
+            skillDamage: 0
+        } : null;
 
         return {
             name: data.characterName,
@@ -1127,7 +1724,10 @@ async function fetchCharacterData(nickname) {
             dps: dps,
             profile_img: data.profileImageUrl,
             server: '지켈',
-            charId: charId 
+            charId: charId,
+            aonScore: data.aonScore || 0,
+            combatScore: data.combatScore || 0,
+            calcStats: calcStats
         };
     } catch (error) {
         console.error(error);
