@@ -335,6 +335,31 @@ input:focus, textarea:focus, select:focus {
 }
 .filter-group select { min-width: 160px; cursor: pointer; }
 
+.type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.06);
+    color: var(--text-main);
+}
+
+.type-badge.party {
+    border-color: rgba(139, 92, 246, 0.35);
+    background: rgba(139, 92, 246, 0.14);
+    color: var(--primary-light);
+}
+
+.type-badge.member {
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.14);
+    color: #34d399;
+}
+
 /* =========================================
    Post Grid & Cards
    ========================================= */

@@ -59,6 +59,10 @@
             <main class="board-section">
                 <!-- 게시판 탭 -->
                 <div class="board-tabs">
+                    <button class="tab-btn" data-tab="all">
+                        <i class="fa-solid fa-layer-group"></i> 전체
+                        <span class="sub-text">(모든 모집/구직)</span>
+                    </button>
                     <button class="tab-btn active" data-tab="party">
                         <i class="fa-solid fa-users"></i> 파티원 구해요
                         <span class="sub-text">(파티원이 필요해요)</span>
@@ -470,6 +474,17 @@
                     <div style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 5px;">예상 아툴 전투력</div>
                     <div id="calcResultScore" style="font-size: 2rem; font-weight: 700; color: var(--primary-light); font-family: 'Cafe24Ssurround';">0</div>
                     <div id="calcDiff" style="font-size: 0.9rem; color: var(--danger); font-weight: 700; height: 20px;"></div>
+                    
+                    <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); text-align:left;">
+                        <div class="form-group-row" style="margin-bottom: 10px;">
+                            <label style="min-width: 110px;">목표 전투력</label>
+                            <input type="number" id="calcTargetScore" placeholder="예: 35000" style="flex:1;">
+                        </div>
+                        <button id="doRecommendBtn" class="btn-success full-width" style="margin-top: 6px;">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> 목표 달성 추천
+                        </button>
+                        <div id="calcRecommendOutput" style="margin-top: 12px; font-size: 0.9rem; color: var(--text-sub); line-height: 1.55; white-space: pre-wrap;"></div>
+                    </div>
                 </div>
 
                 <button id="doCalculateBtn" class="btn-primary full-width" style="margin-top: 20px;">계산하기</button>

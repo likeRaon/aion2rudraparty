@@ -319,7 +319,10 @@ const elements = {
     calcMultiHit: document.getElementById('calcMultiHit'),
     calcResultScore: document.getElementById('calcResultScore'),
     calcDiff: document.getElementById('calcDiff'),
-    calcAtulBtn: document.getElementById('calcAtulBtn')
+    calcAtulBtn: document.getElementById('calcAtulBtn'),
+    calcTargetScore: document.getElementById('calcTargetScore'),
+    doRecommendBtn: document.getElementById('doRecommendBtn'),
+    calcRecommendOutput: document.getElementById('calcRecommendOutput')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -537,6 +540,10 @@ function setupEventListeners() {
         elements.doCalculateBtn.addEventListener('click', calculateEstimatedDps);
     }
 
+    if (elements.doRecommendBtn) {
+        elements.doRecommendBtn.addEventListener('click', recommendStatsForTargetScore);
+    }
+
     if (elements.calcAtulBtn) {
         elements.calcAtulBtn.addEventListener('click', () => {
             if (!currentCalcData?.name) {
@@ -698,56 +705,92 @@ function convertCritStatToChance(critStat) {
     return (critStat * 0.7) / 10;
 }
 
-// DPS 계산 로직
-function calculateEstimatedDps() {
-    const attackPower = parseFloat(elements.calcAttackPower.value) || 0;
-    const weaponMin = parseFloat(elements.calcWeaponMin.value) || 0;
-    const weaponMax = parseFloat(elements.calcWeaponMax.value) || 0;
-    const critStat = parseFloat(elements.calcCritStat.value) || 0;
-    
-    const combatSpeed = parseFloat(elements.calcCombatSpeed.value) || 0;
-    const weaponDamageAmp = parseFloat(elements.calcWeaponDamageAmp.value) || 0;
-    const damageAmp = parseFloat(elements.calcDamageAmp.value) || 0;
-    const critDamageAmp = parseFloat(elements.calcCritDamageAmp.value) || 0;
-    const skillDamage = parseFloat(elements.calcSkillDamage.value) || 0;
-    const cooldownReduction = parseFloat(elements.calcCooldownReduction.value) || 0;
-    const stunHit = parseFloat(elements.calcStunHit.value) || 0;
-    const perfect = parseFloat(elements.calcPerfect.value) || 0;
-    const multiHit = parseFloat(elements.calcMultiHit.value) || 0;
+function clampPercent(x, max = 100) {
+    const n = Number(x);
+    if (!Number.isFinite(n)) return 0;
+    return Math.min(Math.max(n, 0), max);
+}
 
-    let damageIncreaseValues = {};
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 
-    // 1. 전투 속도
+function readCalcStatsFromInputs() {
+    const toNum = (el) => parseFloat(el?.value) || 0;
+    return {
+        attackPower: Math.max(0, toNum(elements.calcAttackPower)),
+        weaponMin: Math.max(0, toNum(elements.calcWeaponMin)),
+        weaponMax: Math.max(0, toNum(elements.calcWeaponMax)),
+        critStat: Math.max(0, toNum(elements.calcCritStat)),
+
+        combatSpeed: clampPercent(toNum(elements.calcCombatSpeed)),
+        weaponDamageAmp: clampPercent(toNum(elements.calcWeaponDamageAmp)),
+        damageAmp: clampPercent(toNum(elements.calcDamageAmp), 999),
+        critDamageAmp: clampPercent(toNum(elements.calcCritDamageAmp), 999),
+        skillDamage: clampPercent(toNum(elements.calcSkillDamage), 999),
+        cooldownReduction: clampPercent(toNum(elements.calcCooldownReduction), 95), // 100%는 분모 0
+        stunHit: clampPercent(toNum(elements.calcStunHit), 999),
+        perfect: clampPercent(toNum(elements.calcPerfect), 999),
+        multiHit: clampPercent(toNum(elements.calcMultiHit), 999)
+    };
+}
+
+function computeAtulScoreFromStats(stats, options = {}) {
+    const critMode = options.critMode || 'legacy'; // 'legacy' | 'expected'
+    const attackPower = stats.attackPower || 0;
+    const weaponMin = stats.weaponMin || 0;
+    const weaponMax = stats.weaponMax || 0;
+    const critStat = stats.critStat || 0;
+
+    const combatSpeed = stats.combatSpeed || 0;
+    const weaponDamageAmp = stats.weaponDamageAmp || 0;
+    const damageAmp = stats.damageAmp || 0;
+    const critDamageAmp = stats.critDamageAmp || 0;
+    const skillDamage = stats.skillDamage || 0;
+    const cooldownReduction = stats.cooldownReduction || 0;
+    const stunHit = stats.stunHit || 0;
+    const perfect = stats.perfect || 0;
+    const multiHit = stats.multiHit || 0;
+
+    const damageIncreaseValues = {};
+
     if (combatSpeed > 0) damageIncreaseValues.combatSpeed = combatSpeed;
-
-    // 2. 무기 피해 증폭 (계수 0.66)
     if (weaponDamageAmp > 0) damageIncreaseValues.weaponDamageAmp = weaponDamageAmp * 0.66;
-
-    // 3. 피해 증폭 (통합)
     if (damageAmp > 0) damageIncreaseValues.damageAmp = damageAmp;
 
-    // 4. 치명타 피해 증폭
-    const criticalChance = convertCritStatToChance(critStat);
+    const criticalChance = clampPercent(convertCritStatToChance(critStat)); // 0~100%
     let adjustedAttackPower = attackPower;
-    
-    // (옵션) 검은 파편의 날개 효과: 치명타 공격력 추가 (95 * 치명타 확률%) - 여기선 생략하거나 기본값 적용 고려
-    // adjustedAttackPower += 95 * (criticalChance / 100); 
 
-    if (critDamageAmp > 0 && criticalChance > 0) {
-        const BASE_CRITICAL_DAMAGE = 1.5;
-        const amplifiedCriticalDamage = BASE_CRITICAL_DAMAGE + (critDamageAmp / 100);
-        const p = criticalChance / 100;
-        const baseExpectedDamage = (1 - p) * 1 + p * BASE_CRITICAL_DAMAGE;
-        const amplifiedExpectedDamage = (1 - p) * 1 + p * amplifiedCriticalDamage;
-        const damageIncrease = ((amplifiedExpectedDamage / baseExpectedDamage) - 1) * 100;
-        damageIncreaseValues.criticalDamageAmp = damageIncrease;
+    // 치명 처리:
+    // - legacy: (기존 방식) "치피증이 있을 때만" 치명 기대값 증가를 반영
+    // - expected: (추천용) 기본 치명(1.5배) 기대값을 항상 반영
+    const BASE_CRITICAL_DAMAGE = 1.5;
+    const p = Math.min(Math.max(criticalChance / 100, 0), 1);
+
+    if (critMode === 'legacy') {
+        if (critDamageAmp > 0 && criticalChance > 0) {
+            const amplifiedCriticalDamage = BASE_CRITICAL_DAMAGE + (critDamageAmp / 100);
+            const baseExpectedDamage = (1 - p) * 1 + p * BASE_CRITICAL_DAMAGE;
+            const amplifiedExpectedDamage = (1 - p) * 1 + p * amplifiedCriticalDamage;
+            const damageIncrease = ((amplifiedExpectedDamage / baseExpectedDamage) - 1) * 100;
+            damageIncreaseValues.criticalDamageAmp = damageIncrease;
+        }
+    } else {
+        const critDamageMultiplier = BASE_CRITICAL_DAMAGE + (critDamageAmp / 100);
+        const expectedCritMultiplier = (1 - p) * 1 + p * critDamageMultiplier; // 1.0 ~ (1.5+치피증)
+        if (expectedCritMultiplier > 1) {
+            damageIncreaseValues.criticalExpected = (expectedCritMultiplier - 1) * 100;
+        }
     }
 
-    // 5. 스킬 피해 증폭
     if (skillDamage > 0) damageIncreaseValues.skillDamage = skillDamage;
 
-    // 6. 재사용 대기 시간 감소
-    if (cooldownReduction > 0) {
+    if (cooldownReduction > 0 && cooldownReduction < 100) {
         const COOLDOWN_EFFICIENCY = 0.5;
         const cooldownMultiplier = 100 / (100 - cooldownReduction);
         const theoreticalDamageIncrease = (cooldownMultiplier - 1) * 100;
@@ -755,33 +798,29 @@ function calculateEstimatedDps() {
         damageIncreaseValues.cooldownReduction = actualDamageIncrease;
     }
 
-    // 7. 강타
     if (stunHit > 0) damageIncreaseValues.stunHit = stunHit;
 
-    // 8. 완벽
     if (perfect > 0 && weaponMin > 0 && weaponMax > 0 && weaponMax > weaponMin) {
         const damageIncrease = perfect * ((weaponMax - weaponMin) / (weaponMax + weaponMin));
         damageIncreaseValues.perfect = damageIncrease;
     }
 
-    // 9. 다단 히트 적중
     if (multiHit > 0) {
         const baseMultiHitPercent = 18;
         const totalMultiHitPercent = baseMultiHitPercent + multiHit;
-        
+
         const f = (x) => 11.1 * x + 13.9 * Math.pow(x, 2) + 17.8 * Math.pow(x, 3) + 23.9 * Math.pow(x, 4);
-        
+
         const baseDamageIncrease = f(baseMultiHitPercent / 100);
         const totalDamageIncrease = f(totalMultiHitPercent / 100);
-        
+
         const baseMultiplier = 1 + baseDamageIncrease / 100;
         const totalMultiplier = 1 + totalDamageIncrease / 100;
         const actualDamageIncrease = ((totalMultiplier / baseMultiplier) - 1) * 100;
-        
+
         damageIncreaseValues.multiHit = actualDamageIncrease;
     }
 
-    // 최종 계산
     let totalMultiplier = 1.0;
     for (const key in damageIncreaseValues) {
         totalMultiplier *= (1 + damageIncreaseValues[key] / 100);
@@ -789,10 +828,22 @@ function calculateEstimatedDps() {
 
     const finalCombatScore = adjustedAttackPower * totalMultiplier;
     const score = Math.round(finalCombatScore);
-    
+
+    return {
+        score,
+        totalMultiplier,
+        criticalChance
+    };
+}
+
+// DPS 계산 로직
+function calculateEstimatedDps() {
+    const stats = readCalcStatsFromInputs();
+    // "예상 아툴 전투력"은 기존 계산 방식(legacy) 유지
+    const { score } = computeAtulScoreFromStats(stats, { critMode: 'legacy' });
+
     elements.calcResultScore.textContent = score.toLocaleString();
-    
-    // 변화량 표시: 이전 계산값 대비 현재 계산값
+
     if (elements.calcDiff) {
         if (lastSimulatedScore === null || !Number.isFinite(lastSimulatedScore)) {
             lastSimulatedScore = score;
@@ -808,6 +859,167 @@ function calculateEstimatedDps() {
         elements.calcDiff.textContent = `(${sign}${diff.toLocaleString()})`;
         elements.calcDiff.style.color = diff > 0 ? 'var(--success)' : (diff < 0 ? 'var(--danger)' : 'var(--text-muted)');
     }
+}
+
+function recommendStatsForTargetScore() {
+    const out = elements.calcRecommendOutput;
+    if (!out) return;
+
+    const target = parseFloat(elements.calcTargetScore?.value) || 0;
+    const baseStats = readCalcStatsFromInputs();
+    // 목표/표시 기준 점수는 legacy(예상 아툴 전투력과 동일 기준)
+    const base = computeAtulScoreFromStats(baseStats, { critMode: 'legacy' });
+
+    if (!target || target <= 0) {
+        out.textContent = '목표 전투력을 숫자로 입력해 주세요.';
+        return;
+    }
+
+    if (target <= base.score) {
+        out.textContent = `이미 목표 달성 상태입니다.\n현재 ${base.score.toLocaleString()} ≥ 목표 ${Math.round(target).toLocaleString()}`;
+        return;
+    }
+
+    // “가능한 모든 사항”의 현실 제약을 수식 레벨에서 반영할 수 있는 범위:
+    // - 비선형/상호작용(치명확률×치피증, 쿨감 분모 등)을 반복 재평가로 반영
+    // - 퍼센트 상한(0~100, 쿨감 0~95) 같은 수학적/안전 상한 적용
+    // - 무기 최소/최대는 실제로 함께 오르는 경우가 많아 "무기공격력(최소+최대 동시)" 항목을 우선 고려
+
+    // 스텝은 "현실적으로 비교 가능한 단위"로 조정 (너무 작은 단위는 %스탯에 밀려 항상 하위로 고정되는 현상 완화)
+    const knobs = [
+        { key: 'attackPower', label: '공격력', step: 100, apply: (s, step) => ({ ...s, attackPower: s.attackPower + step }) },
+        { key: 'weaponDamage', label: '무기공격력(최소+최대)', step: 5, apply: (s, step) => ({ ...s, weaponMin: s.weaponMin + step, weaponMax: s.weaponMax + step }) },
+        { key: 'critStat', label: '치명타 수치', step: 200, apply: (s, step) => ({ ...s, critStat: s.critStat + step }) },
+
+        { key: 'combatSpeed', label: '전투 속도(%)', step: 1.0, apply: (s, step) => ({ ...s, combatSpeed: clampPercent(s.combatSpeed + step) }) },
+        { key: 'weaponDamageAmp', label: '무기 피해 증폭(%)', step: 1.0, apply: (s, step) => ({ ...s, weaponDamageAmp: clampPercent(s.weaponDamageAmp + step) }) },
+        { key: 'damageAmp', label: '피해 증폭(통합 %)', step: 1.0, apply: (s, step) => ({ ...s, damageAmp: Math.max(0, s.damageAmp + step) }) },
+        { key: 'critDamageAmp', label: '치명타 피해 증폭(%)', step: 1.0, apply: (s, step) => ({ ...s, critDamageAmp: Math.max(0, s.critDamageAmp + step) }) },
+        { key: 'skillDamage', label: '스킬 피해 증폭(%)', step: 1.0, apply: (s, step) => ({ ...s, skillDamage: Math.max(0, s.skillDamage + step) }) },
+        { key: 'cooldownReduction', label: '재사용 대기시간 감소(%)', step: 1.0, apply: (s, step) => ({ ...s, cooldownReduction: clampPercent(s.cooldownReduction + step, 95) }) },
+        { key: 'stunHit', label: '강타 적중(%)', step: 1.0, apply: (s, step) => ({ ...s, stunHit: Math.max(0, s.stunHit + step) }) },
+        { key: 'perfect', label: '완벽(%)', step: 1.0, apply: (s, step) => ({ ...s, perfect: Math.max(0, s.perfect + step) }) },
+        { key: 'multiHit', label: '다단 히트 적중(%)', step: 1.0, apply: (s, step) => ({ ...s, multiHit: Math.max(0, s.multiHit + step) }) }
+    ];
+
+    const evalOneStepLegacy = (stats, k) => {
+        const cur = computeAtulScoreFromStats(stats, { critMode: 'legacy' }).score;
+        const nextStats = k.apply(stats, k.step);
+        const next = computeAtulScoreFromStats(nextStats, { critMode: 'legacy' }).score;
+        const gain = next - cur;
+        return { gain, nextStats };
+    };
+
+    // 추천 효율 평가용(기대값 반영): 랭킹과 선택을 더 합리적으로 만들기 위한 내부 평가
+    const evalOneStepExpected = (stats, k) => {
+        const cur = computeAtulScoreFromStats(stats, { critMode: 'expected' }).score;
+        const nextStats = k.apply(stats, k.step);
+        const next = computeAtulScoreFromStats(nextStats, { critMode: 'expected' }).score;
+        const gain = next - cur;
+        return { gain, nextStats };
+    };
+
+    // 추천판단(치명 기대 반영) vs 표시기준(기존 계산)으로 설명
+    const detailedDelta = knobs.map(k => {
+        const expected = evalOneStepExpected(baseStats, k);
+        const legacy = evalOneStepLegacy(baseStats, k);
+        return {
+            key: k.key,
+            label: k.label,
+            step: k.step,
+            expectedGain: expected.gain,
+            legacyGain: legacy.gain
+        };
+    }).sort((a, b) => b.expectedGain - a.expectedGain);
+
+    // 현재 상태에서의 1스텝 효율 랭킹(기대값 반영)
+    const baseRank = detailedDelta.slice();
+
+    // 목표 달성을 위한 반복(그리디, 매번 효율 재평가)
+    let working = { ...baseStats };
+    let workingScore = base.score;
+    const plan = new Map(); // label -> totalIncrease
+    const MAX_ITERS = 2000;
+
+    for (let i = 0; i < MAX_ITERS && workingScore < target; i++) {
+        let best = null;
+        for (const k of knobs) {
+            const expected = evalOneStepExpected(working, k);
+            const legacy = evalOneStepLegacy(working, k);
+            // 선택 기준은 expected(기대값) 이지만, 실제 목표 도달(표시)은 legacy 기준으로 누적
+            const scoreGainForChoice = expected.gain;
+            if (!best || scoreGainForChoice > best.choiceGain) {
+                best = { k, choiceGain: scoreGainForChoice, legacyGain: legacy.gain, nextStats: legacy.nextStats };
+            }
+        }
+
+        if (!best || best.legacyGain <= 0) break;
+
+        working = best.nextStats;
+        workingScore = computeAtulScoreFromStats(working, { critMode: 'legacy' }).score;
+        plan.set(best.k.label, (plan.get(best.k.label) || 0) + best.k.step);
+    }
+
+    const diff = Math.max(0, Math.round(target) - workingScore);
+    const top5 = baseRank.slice(0, 5)
+        .map((r, idx) => {
+            const exp = r.expectedGain || 0;
+            const leg = r.legacyGain || 0;
+            const stepTxt = Number.isInteger(r.step) ? r.step : r.step.toFixed(1);
+            return `${idx + 1}. ${r.label} +${stepTxt} → 추천판단 +${exp.toLocaleString()} / 표시기준 +${leg.toLocaleString()}`;
+        })
+        .join('\n');
+
+    const planLines = Array.from(plan.entries())
+        .map(([label, inc]) => `- ${label}: +${Number.isInteger(inc) ? inc : inc.toFixed(1)}`);
+
+    const fullList = detailedDelta
+        .map(r => {
+            const exp = r.expectedGain || 0;
+            const leg = r.legacyGain || 0;
+            const stepTxt = Number.isInteger(r.step) ? r.step : r.step.toFixed(1);
+            return `- ${r.label} +${stepTxt} → 추천판단 +${exp.toLocaleString()} / 표시기준 +${leg.toLocaleString()}`;
+        })
+        .join('\n');
+
+    const notes = [];
+    if (!baseStats.weaponMin || !baseStats.weaponMax) {
+        notes.push('무기 최소/최대가 0이면 "완벽" 계산이 사실상 의미가 없거나(조건 미충족), 결과가 왜곡될 수 있어요.');
+    }
+    if (baseStats.weaponMax <= baseStats.weaponMin) {
+        notes.push('무기 최대공격력이 최소공격력보다 작거나 같으면 "완벽" 기대 증가량이 0으로 처리됩니다.');
+    }
+    if (baseStats.cooldownReduction >= 95) {
+        notes.push('재사용 대기시간 감소는 수식상 100%에 가까워질수록 분모가 작아져 급격히 커질 수 있어 95% 상한으로 제한했습니다.');
+    }
+
+    const need = Math.max(0, Math.round(target) - base.score);
+    const planText = (planLines.length ? planLines.join('\n') : '- (추천 가능한 증가가 없습니다. 입력값/상한을 확인해 주세요)');
+    const noteText = (notes.length ? `\n\n[주의/가정]\n- ${notes.join('\n- ')}` : '');
+
+    out.innerHTML =
+        `<div style="font-weight:700; color: var(--text-main);">목표 달성 추천 결과</div>` +
+        `<div style="margin-top:6px; color: var(--text-sub);">` +
+        `현재 <b>${base.score.toLocaleString()}</b> → 목표 <b>${Math.round(target).toLocaleString()}</b> (필요 +${need.toLocaleString()})` +
+        `</div>` +
+        `<div style="margin-top:10px; padding:10px; border:1px solid var(--border); border-radius:10px; background:rgba(255,255,255,0.03);">` +
+        `<div style="font-size:0.85rem; color: var(--text-sub); line-height:1.6;">` +
+        `- <b>표시기준</b>: 화면의 “예상 아툴 전투력(계산하기)”과 같은 기준(기존 계산)<br>` +
+        `- <b>추천판단</b>: 어떤 스탯이 효율적인지 고를 때는 치명 기대값까지 반영해서 판단` +
+        `</div>` +
+        `</div>` +
+        `<div style="margin-top:14px;"><b>TOP 5 (왜 이 순서인지)</b></div>` +
+        `<pre style="margin-top:6px; white-space:pre-wrap; font-family:inherit; color: var(--text-sub);">${escapeHtml(top5)}</pre>` +
+        `<details style="margin-top:10px;">` +
+        `<summary style="cursor:pointer; color: var(--primary-light); font-weight:700;">전체 변화량(자세히 보기)</summary>` +
+        `<pre style="margin-top:8px; white-space:pre-wrap; font-family:inherit; color: var(--text-sub);">${escapeHtml(fullList)}</pre>` +
+        `</details>` +
+        `<div style="margin-top:14px;"><b>추천 플랜</b></div>` +
+        `<pre style="margin-top:6px; white-space:pre-wrap; font-family:inherit; color: var(--text-sub);">${escapeHtml(planText)}</pre>` +
+        `<div style="margin-top:10px; color: var(--text-sub);">예상 도달 전투력(표시기준): <b>${workingScore.toLocaleString()}</b>` +
+        `${diff > 0 ? ` <span style="color: var(--warning); font-weight:700;">(목표까지 약 ${diff.toLocaleString()} 부족)</span>` : ` <span style="color: var(--success); font-weight:700;">(목표 달성)</span>`}` +
+        `</div>` +
+        (notes.length ? `<pre style="margin-top:10px; white-space:pre-wrap; font-family:inherit; color: var(--text-muted);">${escapeHtml(noteText.trim())}</pre>` : '');
 }
 
 
@@ -1484,12 +1696,19 @@ function renderPosts() {
     
     posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+    // 전체 탭에서는 글쓰기 버튼 숨김
+    if (elements.writeBtn) {
+        elements.writeBtn.classList.toggle('hidden', currentTab === 'all');
+    }
+
     let filteredPosts = posts.filter(post => {
         if (post.type === 'notice') return false; 
         if (post.deletedAt) return false;
 
         if (currentTab === 'completed') {
             return post.status === 'full';
+        } else if (currentTab === 'all') {
+            return post.status !== 'full' && (post.type === 'party' || post.type === 'member');
         } else {
             return post.status !== 'full' && post.type === currentTab;
         }
@@ -1574,9 +1793,16 @@ function renderPosts() {
             `;
             
         } else {
+            const typeBadgeHtml = (currentTab === 'all')
+                ? (post.type === 'party'
+                    ? `<span class="type-badge party"><i class="fa-solid fa-users"></i> 파티원 구해요</span>`
+                    : `<span class="type-badge member"><i class="fa-solid fa-user-plus"></i> 파티 구해요</span>`)
+                : '';
+
             card.innerHTML = `
                 <div class="post-header">
                     <div class="badge-container">
+                        ${typeBadgeHtml}
                         ${statusHtml}
                         ${categoryHtml}
                         ${rolesHtml}
