@@ -1,5 +1,6 @@
 const API_BASE_URL = 'https://api.aon2.info/api/v1/aion2';
 const PROXY_URL = '';
+const APP_VERSION = '2026-01-09.1';
 
 // 게시글 등록 알림(모집/구직)
 const POST_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU1OTI1NzA3ODk4ODgyMS81VDczT1VxWUxnZzFEYUs1Skk3M0R2OFpfYzdNVlBiajZXUkE0c3VyQ0paQ1ZXSW96T1Voel9rWDBhVEdiSkx3WkJLRg==';
@@ -51,6 +52,15 @@ let currentCalcData = null; // 현재 계산기용 데이터
 let lastSimulatedScore = null; // 시뮬레이터 직전 계산값(변화량 표시용)
 let lastSnapshotById = new Map(); // 하드 삭제 감지용(이전 스냅샷 캐시)
 
+function getSessionId() {
+    let sid = sessionStorage.getItem('rudra_session_id');
+    if (!sid) {
+        sid = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        sessionStorage.setItem('rudra_session_id', sid);
+    }
+    return sid;
+}
+
 async function logAuditEvent(eventType, payload = {}) {
     if (!db) return;
     try {
@@ -88,26 +98,82 @@ function formatPostTypeLabel(type) {
     return '📝 게시글';
 }
 
+function formatKst(isoOrDate) {
+    try {
+        const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+        if (!d || Number.isNaN(d.getTime())) return null;
+        return new Intl.DateTimeFormat('ko-KR', {
+            timeZone: 'Asia/Seoul',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        }).format(d);
+    } catch {
+        return null;
+    }
+}
+
+function getHardDeleteNotifyCache() {
+    try {
+        return JSON.parse(sessionStorage.getItem('rudra_hard_delete_notified') || '{}');
+    } catch {
+        return {};
+    }
+}
+
+function setHardDeleteNotified(postId) {
+    try {
+        const cache = getHardDeleteNotifyCache();
+        cache[postId] = Date.now();
+        sessionStorage.setItem('rudra_hard_delete_notified', JSON.stringify(cache));
+    } catch {}
+}
+
+function shouldNotifyHardDelete(postId) {
+    if (!postId) return false;
+    const cache = getHardDeleteNotifyCache();
+    if (cache[postId]) return false; // 같은 세션에서 중복 방지
+    return true;
+}
+
 async function notifyDeletionToDiscord(postLike, reasonCode, reasonMessage) {
     const p = postLike || {};
     const title = p.title || '(제목 없음)';
     const author = p.author?.name ? `${p.author.name}${p.author?.class ? ` (${p.author.class})` : ''}` : '(작성자 정보 없음)';
     const createdAt = p.createdAt || null;
     const postId = p.id || p.postId || null;
+    const detectedAtIso = new Date().toISOString();
+    const detectedAtKst = formatKst(detectedAtIso);
+    const createdAtKst = createdAt ? formatKst(createdAt) : null;
+    const deletedAtIso = p.deletedAt || null;
+    const deletedAtKst = deletedAtIso ? formatKst(deletedAtIso) : null;
 
     const lines = [
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
         '🗑️ **게시글 삭제/정리 감지**',
+        `- **감지시각(KST)**: ${detectedAtKst || ''}`,
+        `- **감지시각(ISO)**: ${detectedAtIso}`,
         '',
         `- **유형**: ${formatPostTypeLabel(p.type)}`,
         `- **제목**: ${title}`,
         `- **작성자**: ${author}`,
-        createdAt ? `- **작성시간**: ${createdAt}` : null,
+        createdAtKst ? `- **작성시간(KST)**: ${createdAtKst}` : null,
+        createdAt ? `- **작성시간(ISO)**: ${createdAt}` : null,
         postId ? `- **postId**: ${postId}` : null,
+        `- **appVersion**: ${APP_VERSION}`,
         '',
         `- **사유코드**: ${reasonCode || 'unknown'}`,
         `- **사유**: ${reasonMessage || ''}`,
+        deletedAtKst ? `- **삭제처리시각(KST)**: ${deletedAtKst}` : null,
+        deletedAtIso ? `- **삭제처리시각(ISO)**: ${deletedAtIso}` : null,
+        p.deletedSource ? `- **삭제경로**: ${p.deletedSource}` : null,
         '',
-        `- **처리자(현재 세션)**: ${currentUser?.name || 'unknown'}${currentUser?.isAdmin ? ' (admin)' : ''}`
+        `- **감지자(현재 세션)**: ${currentUser?.name || 'unknown'}${currentUser?.isAdmin ? ' (admin)' : ''}`,
+        '※ hard_delete_detected의 “감지자”는 삭제 실행자가 아니라, 사라짐을 감지한 사용자일 수 있습니다.',
+        '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
     ].filter(Boolean);
 
     await sendLogToDiscord(lines);
@@ -121,18 +187,29 @@ function getDeleteActor() {
         authProvider: currentUser?.adminAuth?.provider || null,
         discordUserId: currentUser?.adminAuth?.discordUserId || null,
         userAgent: navigator.userAgent,
-        page: location.href
+        page: location.href,
+        appVersion: APP_VERSION,
+        sessionId: getSessionId()
     };
     return actor;
 }
 
-async function softDeletePostById(postId, reasonCode, reasonMessage) {
+function canManagePost(post) {
+    if (!post) return false;
+    if (!currentUser) return false;
+    if (currentUser.isAdmin) return true;
+    // 일반 유저는 "내 닉네임 == 작성자 닉네임" 일 때만 관리 가능 (추가로 비밀번호 확인)
+    return currentUser.name && post.author && currentUser.name === post.author.name;
+}
+
+async function softDeletePostById(postId, reasonCode, reasonMessage, source = null) {
     if (!db || !postId) return;
 
     const patch = {
         deletedAt: new Date().toISOString(),
         deletedReasonCode: reasonCode || 'unknown',
         deletedReason: reasonMessage || '',
+        deletedSource: source || null,
         deletedActor: getDeleteActor(),
         status: 'deleted'
     };
@@ -330,6 +407,12 @@ document.addEventListener('DOMContentLoaded', () => {
     handleDiscordAdminCallback();
     setupRealtimeListener();
     setupEventListeners();
+
+    // 만료 정리 루틴: 스냅샷 갱신이 없더라도 "페이지가 열려있는 동안" 주기적으로 정리
+    // (서버가 없으므로, 아무도 접속하지 않으면 정리는 그 시점까지 지연될 수 있음)
+    setInterval(() => {
+        try { checkExpiredPosts(); } catch (e) { console.error(e); }
+    }, 60 * 1000);
 });
 
 function setupRealtimeListener() {
@@ -350,7 +433,10 @@ function setupRealtimeListener() {
                         previousData: oldData || null
                     });
                     // 비정상(하드 삭제) 감지 로그를 디스코드에도 남김
-                    notifyDeletionToDiscord({ ...(oldData || {}), postId: oldId }, 'hard_delete_detected', '문서가 하드 삭제되어 스냅샷에서 사라짐');
+                    if (shouldNotifyHardDelete(oldId)) {
+                        setHardDeleteNotified(oldId);
+                        notifyDeletionToDiscord({ ...(oldData || {}), postId: oldId }, 'hard_delete_detected', '문서가 하드 삭제되어 스냅샷에서 사라짐');
+                    }
                 }
             }
             lastSnapshotById = nextById;
@@ -1416,7 +1502,7 @@ function checkExpiredPosts() {
 
         if (now - postTime > expirationMs) {
             // 하드 삭제 대신 사유 기록(soft delete)
-            softDeletePostById(post.id, 'expired', '유효기간 만료로 자동 삭제')
+            softDeletePostById(post.id, 'expired', '유효기간 만료로 자동 삭제', 'auto_expire')
                 .then(() => {
                     deleteDiscordMessage(post);
                     db.collection("posts").doc(post.id).update({ discordMessageId: null }).catch(() => {});
@@ -1679,7 +1765,7 @@ function renderNotices(showAll = false) {
 function deleteNotice(notice) {
     if(confirm('이 공지사항을 삭제하시겠습니까?')) {
         // 공지사항도 사유를 남기고 숨김 처리(soft delete)
-        softDeletePostById(notice.id, 'notice_deleted', '관리자에 의해 공지사항 삭제')
+        softDeletePostById(notice.id, 'notice_deleted', '관리자에 의해 공지사항 삭제', 'notice_delete_ui')
             .then(() => {
                 showToast("공지사항이 삭제되었습니다.");
                 notifyDeletionToDiscord({ ...notice, id: notice.id }, 'notice_deleted', '관리자에 의해 공지사항 삭제');
@@ -1788,7 +1874,7 @@ function renderPosts() {
                     <div style="font-size:0.8rem; color:#666; margin-top:5px;">클릭하여 상세 정보 보기</div>
                 </div>
                 <div style="padding:10px; text-align:center;">
-                    ${currentUser && currentUser.isAdmin ? `<button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width">관리</button>` : ''}
+                    ${canManagePost(post) ? `<button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width">관리</button>` : ''}
                 </div>
             `;
             
@@ -1827,7 +1913,7 @@ function renderPosts() {
                 </div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
                     ${post.link ? `<button onclick="event.stopPropagation(); window.open('${post.link}')" class="btn-primary full-width" style="padding: 8px;">참여</button>` : ''}
-                    <button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width" style="padding: 8px;">관리</button>
+                    ${canManagePost(post) ? `<button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width" style="padding: 8px;">관리</button>` : ''}
                 </div>
             `;
         }
@@ -1936,8 +2022,20 @@ window.checkPasswordAndManage = function(postId) {
     const post = posts.find(p => p.id === postId);
     if (!post) return;
 
-    if (currentUser && currentUser.isAdmin) {
+    if (!currentUser) {
+        alert('관리 기능은 로그인(닉네임 설정) 후 사용 가능합니다.');
+        elements.authModal.classList.remove('hidden');
+        return;
+    }
+
+    if (currentUser.isAdmin) {
         openManageModal(post);
+        return;
+    }
+
+    // 작성자 닉네임이 아니면 비밀번호를 알아도 관리 불가 (사칭/무단삭제 방지)
+    if (!canManagePost(post)) {
+        alert('작성자 본인(동일 닉네임)만 관리할 수 있습니다.');
         return;
     }
 
@@ -1960,6 +2058,10 @@ function updatePostStatus(status) {
     if (!currentEditingPostId) return;
     const post = posts.find(p => p.id === currentEditingPostId);
     if (post) {
+        if (!canManagePost(post)) {
+            alert('권한이 없습니다.');
+            return;
+        }
         db.collection("posts").doc(post.id).update({
             status: status
         }).then(() => {
@@ -1975,6 +2077,11 @@ function updatePostStatus(status) {
 
 async function addPartyMember() {
     if (!currentEditingPostId) return;
+    const post = posts.find(p => p.id === currentEditingPostId);
+    if (!post || !canManagePost(post)) {
+        alert('권한이 없습니다.');
+        return;
+    }
     const name = elements.newMemberName.value.trim();
     const cls = elements.newMemberClass.value;
     
@@ -1984,7 +2091,6 @@ async function addPartyMember() {
     const charData = await fetchCharacterData(name);
     elements.addMemberBtn.textContent = '추가';
     
-    const post = posts.find(p => p.id === currentEditingPostId);
     if (post) {
         const newMember = {
             name: name,
@@ -2009,6 +2115,10 @@ window.deletePartyMember = function(index) {
     if (!currentEditingPostId) return;
     const post = posts.find(p => p.id === currentEditingPostId);
     if (post && post.members) {
+        if (!canManagePost(post)) {
+            alert('권한이 없습니다.');
+            return;
+        }
         if(confirm('삭제하시겠습니까?')) {
             const updatedMembers = [...post.members];
             updatedMembers.splice(index, 1);
@@ -2045,9 +2155,13 @@ function deletePost() {
     if (!currentEditingPostId) return;
     if (confirm('삭제하시겠습니까?')) {
         const post = posts.find(p => p.id === currentEditingPostId);
+        if (post && !canManagePost(post)) {
+            alert('권한이 없습니다.');
+            return;
+        }
         
         // 하드 삭제 대신 사유 기록(soft delete)
-        softDeletePostById(currentEditingPostId, 'manual_delete', '작성자/관리자 수동 삭제')
+        softDeletePostById(currentEditingPostId, 'manual_delete', '작성자/관리자 수동 삭제', 'post_delete_ui')
             .then(() => {
                 if (post) deleteDiscordMessage(post);
                 if (post) db.collection("posts").doc(post.id).update({ discordMessageId: null }).catch(() => {});
