@@ -30,6 +30,9 @@
                 <div id="userInfo" class="hidden" style="display: flex; align-items: center; gap: 10px;">
                     <span id="userNickname" style="font-weight: 700;"></span>
                     <span id="adminBadge" class="hidden" style="padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; background: rgba(34, 197, 94, 0.14); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3);">관리자</span>
+                    <button id="adminToolsBtn" class="btn-outline hidden" style="padding: 4px 10px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-screwdriver-wrench"></i> 관리자 도구
+                    </button>
                     <button id="adminVerifyBtn" class="btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">어드민 인증</button>
                     <button id="logoutBtn" class="btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">로그아웃</button>
                 </div>
@@ -517,6 +520,87 @@
 
     <!-- 토스트 메시지 컨테이너 -->
     <div id="toastContainer" class="toast-container"></div>
+
+    <!-- 관리자 도구 모달 (어드민 전용 UI) -->
+    <div id="adminToolsModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-screwdriver-wrench"></i> 관리자 도구</h3>
+                <button class="close-btn admin-tools-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="admin-tools-tabs">
+                    <button class="admin-tab-btn active" data-admin-tab="audit"><i class="fa-solid fa-clipboard-list"></i> 로그</button>
+                    <button class="admin-tab-btn" data-admin-tab="backup"><i class="fa-solid fa-database"></i> 백업/복구</button>
+                </div>
+
+                <div id="adminTabAudit" class="admin-tab-panel">
+                    <div class="admin-tools-row">
+                        <select id="auditTypeFilter">
+                            <option value="all">전체 이벤트</option>
+                            <option value="hard_delete_detected">hard_delete_detected</option>
+                            <option value="realtime_listener_error">realtime_listener_error</option>
+                            <option value="discord_delete_error">discord_delete_error</option>
+                            <option value="expire_soft_delete_error">expire_soft_delete_error</option>
+                        </select>
+                        <input id="auditSearch" type="text" placeholder="postId/작성자/제목/사유 검색">
+                        <button id="auditReloadBtn" class="btn-outline"><i class="fa-solid fa-rotate"></i> 새로고침</button>
+                    </div>
+                    <div id="auditList" class="admin-audit-list">
+                        <div style="color: var(--text-sub); padding: 12px;">로그를 불러오는 중...</div>
+                    </div>
+                    <div style="margin-top:8px; color: var(--text-muted); font-size:0.85rem;">
+                        - 시간은 KST로 표시됩니다. (상세 원본은 ISO도 함께 표시)<br>
+                        - 이 화면은 “UI상 관리자 전용”이며, 보안 강제는 Firestore Rules로 해야 합니다.
+                    </div>
+                </div>
+
+                <div id="adminTabBackup" class="admin-tab-panel hidden">
+                    <div class="admin-tools-row" style="align-items: stretch;">
+                        <button id="exportPostsBtn" class="btn-success"><i class="fa-solid fa-file-export"></i> 게시글+공지 내보내기</button>
+                        <button id="exportNoticesBtn" class="btn-outline"><i class="fa-solid fa-bullhorn"></i> 공지만 내보내기</button>
+                        <button id="exportPostsIncludeDeletedBtn" class="btn-outline"><i class="fa-solid fa-eye-slash"></i> (삭제포함) 전체 내보내기</button>
+                    </div>
+
+                    <div style="margin-top:16px; padding-top: 16px; border-top: 1px solid var(--border);">
+                        <div style="display:flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <div style="font-weight: 800; color: var(--text-main);">
+                                <i class="fa-solid fa-trash-arrow-up"></i> 삭제된 글 복구 (soft delete)
+                            </div>
+                            <div class="admin-tools-row" style="margin:0;">
+                                <input id="restoreSearch" type="text" placeholder="제목/작성자/postId 검색" style="min-width: 240px;">
+                                <button id="restoreReloadBtn" class="btn-outline"><i class="fa-solid fa-rotate"></i> 새로고침</button>
+                            </div>
+                        </div>
+                        <div id="restoreList" class="admin-audit-list" style="margin-top:10px;">
+                            <div style="color: var(--text-sub); padding: 12px;">삭제된 글이 없습니다.</div>
+                        </div>
+                        <div style="margin-top:8px; color: var(--text-muted); font-size:0.85rem;">
+                            - 여기서 복구되는 것은 “soft delete( deletedAt 찍힌 글 )”입니다.<br>
+                            - 복구 시 `deletedAt/삭제사유` 필드를 제거하고, 게시글은 상태를 `recruiting`으로 되돌립니다. (디스코드 알림은 자동 복구되지 않습니다.)
+                        </div>
+                    </div>
+
+                    <div style="margin-top:14px; color: var(--text-sub);">
+                        복구(JSON)는 아래에 붙여넣고 “가져오기”를 누르세요. (배열 형태)
+                    </div>
+                    <textarea id="importJsonText" class="admin-json-textarea" placeholder='예: [{"id":"...","type":"party",...}]'></textarea>
+                    <div class="admin-tools-row" style="margin-top:10px;">
+                        <select id="importMode">
+                            <option value="upsert">업서트(동일 id면 업데이트, 없으면 생성)</option>
+                            <option value="create_only">생성만(동일 id면 건너뜀)</option>
+                        </select>
+                        <button id="importBtn" class="btn-primary"><i class="fa-solid fa-file-import"></i> 가져오기</button>
+                        <button id="clearImportBtn" class="btn-outline">비우기</button>
+                    </div>
+                    <div style="margin-top:8px; color: var(--text-muted); font-size:0.85rem;">
+                        - delete가 막혀 있으면 “하드 삭제 복구”는 새 문서로만 가능합니다.<br>
+                        - 삭제된 글을 다시 보이게 하려면(soft delete) `deletedAt`을 제거하는 업데이트가 필요합니다.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Firebase SDK (Version 9 compat) -->
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>

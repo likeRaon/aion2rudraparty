@@ -361,6 +361,84 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* =========================================
+   Admin Tools Modal
+   ========================================= */
+.admin-tools-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.admin-tab-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-sub);
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+}
+.admin-tab-btn.active {
+    color: var(--primary-light);
+    border-color: rgba(139, 92, 246, 0.4);
+    box-shadow: 0 0 0 3px var(--primary-dim);
+}
+.admin-tools-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.admin-audit-list {
+    margin-top: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: rgba(255,255,255,0.03);
+    overflow: hidden;
+}
+.audit-item {
+    padding: 12px 14px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+.audit-item:first-child { border-top: none; }
+.audit-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: baseline;
+}
+.audit-type {
+    font-weight: 800;
+    color: var(--primary-light);
+}
+.audit-time {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.audit-body {
+    margin-top: 6px;
+    color: var(--text-sub);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+}
+.admin-json-textarea {
+    width: 100%;
+    min-height: 220px;
+    margin-top: 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    border-radius: var(--radius-lg);
+    padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.9rem;
+}
+
+/* =========================================
    Post Grid & Cards
    ========================================= */
 .post-grid {

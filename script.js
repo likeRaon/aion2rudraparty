@@ -341,6 +341,7 @@ const elements = {
     logoutBtn: document.getElementById('logoutBtn'),
     adminVerifyBtn: document.getElementById('adminVerifyBtn'),
     adminBadge: document.getElementById('adminBadge'),
+    adminToolsBtn: document.getElementById('adminToolsBtn'),
     authNickname: document.getElementById('authNickname'),
     manageModal: document.getElementById('manageModal'),
     manageCloseBtn: document.querySelector('.manage-close'),
@@ -399,7 +400,28 @@ const elements = {
     calcAtulBtn: document.getElementById('calcAtulBtn'),
     calcTargetScore: document.getElementById('calcTargetScore'),
     doRecommendBtn: document.getElementById('doRecommendBtn'),
-    calcRecommendOutput: document.getElementById('calcRecommendOutput')
+    calcRecommendOutput: document.getElementById('calcRecommendOutput'),
+
+    // 관리자 도구
+    adminToolsModal: document.getElementById('adminToolsModal'),
+    adminToolsCloseBtn: document.querySelector('.admin-tools-close'),
+    adminTabBtns: document.querySelectorAll('.admin-tab-btn'),
+    adminTabAudit: document.getElementById('adminTabAudit'),
+    adminTabBackup: document.getElementById('adminTabBackup'),
+    auditList: document.getElementById('auditList'),
+    auditTypeFilter: document.getElementById('auditTypeFilter'),
+    auditSearch: document.getElementById('auditSearch'),
+    auditReloadBtn: document.getElementById('auditReloadBtn'),
+    exportPostsBtn: document.getElementById('exportPostsBtn'),
+    exportNoticesBtn: document.getElementById('exportNoticesBtn'),
+    exportPostsIncludeDeletedBtn: document.getElementById('exportPostsIncludeDeletedBtn'),
+    restoreList: document.getElementById('restoreList'),
+    restoreSearch: document.getElementById('restoreSearch'),
+    restoreReloadBtn: document.getElementById('restoreReloadBtn'),
+    importJsonText: document.getElementById('importJsonText'),
+    importMode: document.getElementById('importMode'),
+    importBtn: document.getElementById('importBtn'),
+    clearImportBtn: document.getElementById('clearImportBtn')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -497,6 +519,35 @@ function setupEventListeners() {
     if (elements.adminVerifyBtn) {
         elements.adminVerifyBtn.addEventListener('click', beginDiscordAdminVerify);
     }
+
+    if (elements.adminToolsBtn) {
+        elements.adminToolsBtn.addEventListener('click', openAdminToolsModal);
+    }
+    if (elements.adminToolsCloseBtn) {
+        elements.adminToolsCloseBtn.addEventListener('click', closeAdminToolsModal);
+    }
+    if (elements.adminTabBtns) {
+        elements.adminTabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                elements.adminTabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const tab = btn.dataset.adminTab;
+                elements.adminTabAudit.classList.toggle('hidden', tab !== 'audit');
+                elements.adminTabBackup.classList.toggle('hidden', tab !== 'backup');
+            });
+        });
+    }
+    if (elements.auditReloadBtn) elements.auditReloadBtn.addEventListener('click', loadAuditLogs);
+    if (elements.auditTypeFilter) elements.auditTypeFilter.addEventListener('change', renderAuditLogs);
+    if (elements.auditSearch) elements.auditSearch.addEventListener('input', renderAuditLogs);
+    if (elements.restoreReloadBtn) elements.restoreReloadBtn.addEventListener('click', renderRestoreList);
+    if (elements.restoreSearch) elements.restoreSearch.addEventListener('input', renderRestoreList);
+
+    if (elements.exportPostsBtn) elements.exportPostsBtn.addEventListener('click', () => exportPostsJson({ includeDeleted: false, onlyNotices: false }));
+    if (elements.exportNoticesBtn) elements.exportNoticesBtn.addEventListener('click', () => exportPostsJson({ includeDeleted: false, onlyNotices: true }));
+    if (elements.exportPostsIncludeDeletedBtn) elements.exportPostsIncludeDeletedBtn.addEventListener('click', () => exportPostsJson({ includeDeleted: true, onlyNotices: false }));
+    if (elements.importBtn) elements.importBtn.addEventListener('click', importPostsJson);
+    if (elements.clearImportBtn) elements.clearImportBtn.addEventListener('click', () => { if (elements.importJsonText) elements.importJsonText.value = ''; });
 
     // 일반 글쓰기 버튼
     elements.writeBtn.addEventListener('click', () => {
@@ -804,6 +855,290 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+// =========================
+// Admin Tools (Audit / Backup)
+// =========================
+let auditUnsub = null;
+let auditCache = [];
+
+function openAdminToolsModal() {
+    if (!currentUser?.isAdmin) {
+        alert('관리자만 접근 가능합니다.');
+        return;
+    }
+    if (!elements.adminToolsModal) return;
+    elements.adminToolsModal.classList.remove('hidden');
+    loadAuditLogs();
+    renderRestoreList();
+}
+
+function closeAdminToolsModal() {
+    if (!elements.adminToolsModal) return;
+    elements.adminToolsModal.classList.add('hidden');
+    if (auditUnsub) {
+        auditUnsub();
+        auditUnsub = null;
+    }
+}
+
+function renderRestoreList() {
+    if (!elements.restoreList) return;
+    if (!currentUser?.isAdmin) {
+        elements.restoreList.innerHTML = `<div style="color: var(--text-sub); padding: 12px;">관리자만 볼 수 있습니다.</div>`;
+        return;
+    }
+
+    const q = (elements.restoreSearch?.value || '').trim().toLowerCase();
+    const deleted = posts
+        .filter(p => p && p.deletedAt && p.type !== 'notice')
+        .concat(posts.filter(p => p && p.deletedAt && p.type === 'notice')) // 공지는 아래쪽에 이어 붙이기
+        .sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
+
+    let rows = deleted;
+    if (q) {
+        rows = rows.filter(p => {
+            const hay = `${p.id || ''} ${p.title || ''} ${p.author?.name || ''} ${p.deletedReasonCode || ''}`.toLowerCase();
+            return hay.includes(q);
+        });
+    }
+
+    if (!rows.length) {
+        elements.restoreList.innerHTML = `<div style="color: var(--text-sub); padding: 12px;">삭제된 글이 없습니다.</div>`;
+        return;
+    }
+
+    const html = rows.slice(0, 200).map(p => {
+        const kst = formatKst(p.deletedAt) || '';
+        const typeLabel = formatPostTypeLabel(p.type);
+        const author = p.author?.name ? `${p.author.name}${p.author?.class ? ` (${p.author.class})` : ''}` : '(작성자 없음)';
+        const reason = `${p.deletedReasonCode || ''}${p.deletedReason ? ` / ${p.deletedReason}` : ''}`;
+        return `
+            <div class="audit-item">
+                <div class="audit-top">
+                    <div class="audit-type">${escapeHtml(typeLabel)} <span style="color: var(--text-muted); font-weight:700;">(복구 가능)</span></div>
+                    <div class="audit-time">${escapeHtml(kst)} <span style="color: var(--text-muted);">(${escapeHtml(p.deletedAt)})</span></div>
+                </div>
+                <div class="audit-body">
+제목: ${escapeHtml(p.title || '')}
+작성자: ${escapeHtml(author)}
+postId: ${escapeHtml(p.id || '')}
+사유: ${escapeHtml(reason)}
+                </div>
+                <div class="admin-tools-row" style="margin-top:10px;">
+                    <button class="btn-success" onclick="restoreSoftDeletedPost('${escapeHtml(p.id)}')"><i class="fa-solid fa-rotate-left"></i> 복구</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    elements.restoreList.innerHTML = html;
+}
+
+window.restoreSoftDeletedPost = async function(postId) {
+    if (!currentUser?.isAdmin) return alert('관리자만 가능합니다.');
+    if (!db) return alert('DB 연결이 필요합니다.');
+    if (!postId) return;
+
+    const post = posts.find(p => p.id === postId);
+    if (!post) return alert('문서를 찾을 수 없습니다.');
+    if (!post.deletedAt) return alert('이미 삭제 상태가 아닙니다.');
+
+    const ok = confirm(`이 글을 복구할까요?\n\n- 제목: ${post.title || ''}\n- 작성자: ${post.author?.name || ''}\n- 삭제사유: ${post.deletedReasonCode || ''}`);
+    if (!ok) return;
+
+    const del = firebase.firestore.FieldValue.delete();
+    const patch = {
+        deletedAt: del,
+        deletedReasonCode: del,
+        deletedReason: del,
+        deletedActor: del,
+        deletedSource: del
+    };
+
+    // 게시글은 deleted 상태에서 복구하면 recruiting으로 되돌림 (공지는 status가 의미 없지만 통일)
+    patch.status = 'recruiting';
+
+    try {
+        await db.collection("posts").doc(postId).update(patch);
+        showToast(`<i class="fa-solid fa-rotate-left"></i> 복구되었습니다.`);
+        sendLogToDiscord([
+            '🟢 **복구 실행**',
+            `- postId: ${postId}`,
+            `- type: ${post.type}`,
+            `- title: ${post.title || ''}`,
+            `- by: ${currentUser?.name || 'unknown'} (admin)`,
+            `- at(KST): ${formatKst(new Date().toISOString()) || ''}`
+        ]);
+    } catch (e) {
+        console.error(e);
+        alert('복구 실패: ' + (e?.message || String(e)));
+    }
+}
+
+function renderAuditLogs() {
+    if (!elements.auditList) return;
+    const type = elements.auditTypeFilter?.value || 'all';
+    const q = (elements.auditSearch?.value || '').trim().toLowerCase();
+
+    let rows = auditCache.slice();
+    if (type !== 'all') rows = rows.filter(r => r.eventType === type);
+    if (q) {
+        rows = rows.filter(r => {
+            const hay = JSON.stringify(r).toLowerCase();
+            return hay.includes(q);
+        });
+    }
+
+    if (!rows.length) {
+        elements.auditList.innerHTML = `<div style="color: var(--text-sub); padding: 12px;">표시할 로그가 없습니다.</div>`;
+        return;
+    }
+
+    const html = rows.slice(0, 200).map(r => {
+        const kst = formatKst(r.createdAt) || '';
+        const iso = r.createdAt || '';
+        const actorName = r.actor?.by || '(unknown)';
+        const actorAdmin = r.actor?.isAdmin ? ' (admin)' : '';
+        const actorDiscord = r.actor?.discordUserId ? ` / discord:${r.actor.discordUserId}` : '';
+        const title = r.payload?.previousData?.title || r.payload?.title || '';
+        const postId = r.payload?.postId || r.payload?.id || '';
+        const msg = r.payload?.message || r.payload?.error || '';
+        const line2 = [
+            postId ? `postId=${postId}` : null,
+            title ? `title="${title}"` : null,
+            msg ? `msg="${msg}"` : null
+        ].filter(Boolean).join(' / ');
+
+        return `
+            <div class="audit-item">
+                <div class="audit-top">
+                    <div class="audit-type">${escapeHtml(r.eventType || '')}</div>
+                    <div class="audit-time">${escapeHtml(kst)} <span style="color: var(--text-muted);">(${escapeHtml(iso)})</span></div>
+                </div>
+                <div class="audit-body">
+감지자: ${escapeHtml(actorName)}${escapeHtml(actorAdmin)}${escapeHtml(actorDiscord)}
+${escapeHtml(line2)}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    elements.auditList.innerHTML = html;
+}
+
+function loadAuditLogs() {
+    if (!db || !elements.auditList) return;
+    elements.auditList.innerHTML = `<div style="color: var(--text-sub); padding: 12px;">로그를 불러오는 중...</div>`;
+
+    if (auditUnsub) {
+        auditUnsub();
+        auditUnsub = null;
+    }
+
+    auditUnsub = db.collection("audit_logs")
+        .orderBy("createdAt", "desc")
+        .limit(200)
+        .onSnapshot((snap) => {
+            auditCache = [];
+            snap.forEach(doc => auditCache.push({ id: doc.id, ...doc.data() }));
+            renderAuditLogs();
+        }, (err) => {
+            console.error(err);
+            elements.auditList.innerHTML = `<div style="color: var(--danger); padding: 12px;">로그 로드 실패: ${escapeHtml(err?.message || String(err))}</div>`;
+        });
+}
+
+function downloadJson(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function exportPostsJson(opts) {
+    if (!currentUser?.isAdmin) {
+        alert('관리자만 가능합니다.');
+        return;
+    }
+    const includeDeleted = !!opts?.includeDeleted;
+    const onlyNotices = !!opts?.onlyNotices;
+
+    let list = posts.slice();
+    if (!includeDeleted) list = list.filter(p => !p.deletedAt);
+    if (onlyNotices) list = list.filter(p => p.type === 'notice');
+
+    const payload = list.map(p => ({ ...p })); // shallow copy (id 포함)
+    const name = onlyNotices ? 'notices' : (includeDeleted ? 'posts_all_including_deleted' : 'posts');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadJson(`${name}_${ts}.json`, payload);
+    showToast(`<i class="fa-solid fa-file-export"></i> 내보내기 완료: ${payload.length}개`);
+}
+
+async function importPostsJson() {
+    if (!currentUser?.isAdmin) {
+        alert('관리자만 가능합니다.');
+        return;
+    }
+    if (!db) return alert('DB 연결이 필요합니다.');
+    const txt = elements.importJsonText?.value || '';
+    if (!txt.trim()) return alert('JSON을 붙여넣어 주세요.');
+
+    let data;
+    try {
+        data = JSON.parse(txt);
+    } catch (e) {
+        alert('JSON 파싱에 실패했습니다. 형식을 확인해 주세요.');
+        return;
+    }
+    if (!Array.isArray(data)) {
+        alert('JSON은 배열 형태여야 합니다. 예: [{"id":"..."}]');
+        return;
+    }
+
+    const mode = elements.importMode?.value || 'upsert';
+    const ok = confirm(`가져오기 ${data.length}건을 진행할까요?\n모드: ${mode}`);
+    if (!ok) return;
+
+    const chunks = [];
+    const size = 400; // batch 500 제한 여유
+    for (let i = 0; i < data.length; i += size) chunks.push(data.slice(i, i + size));
+
+    let upserted = 0;
+    let skipped = 0;
+    for (const chunk of chunks) {
+        const batch = db.batch();
+        for (const item of chunk) {
+            if (!item || typeof item !== 'object') continue;
+            const id = item.id;
+            const docRef = id ? db.collection("posts").doc(String(id)) : db.collection("posts").doc();
+            const payload = { ...item };
+            delete payload.id;
+
+            // 최소 필드 보정
+            if (!payload.createdAt) payload.createdAt = new Date().toISOString();
+            if (!payload.type) payload.type = 'party';
+
+            if (mode === 'create_only') {
+                // create_only는 존재 여부를 batch에서 확인할 수 없으므로 "set(merge=false)" 대신 "set(merge=true)"로 안전하게 쓰지 않음
+                // 여기서는 그냥 skip 처리(정확한 create_only는 별도 get 필요)
+                skipped++;
+                continue;
+            }
+
+            batch.set(docRef, payload, { merge: true });
+            upserted++;
+        }
+        await batch.commit();
+    }
+
+    showToast(`<i class="fa-solid fa-file-import"></i> 가져오기 완료: upsert ${upserted} / skip ${skipped}`);
 }
 
 function readCalcStatsFromInputs() {
@@ -1244,6 +1579,10 @@ function updateUserUI() {
             elements.adminVerifyBtn.classList.toggle('hidden', !!currentUser.isAdmin);
         }
 
+        if (elements.adminToolsBtn) {
+            elements.adminToolsBtn.classList.toggle('hidden', !currentUser.isAdmin);
+        }
+
         // 관리자인 경우 공지 작성 버튼 표시
         if (currentUser.isAdmin) {
             elements.writeNoticeBtn.classList.remove('hidden');
@@ -1256,6 +1595,7 @@ function updateUserUI() {
         elements.writeNoticeBtn.classList.add('hidden');
         if (elements.adminVerifyBtn) elements.adminVerifyBtn.classList.add('hidden');
         if (elements.adminBadge) elements.adminBadge.classList.add('hidden');
+        if (elements.adminToolsBtn) elements.adminToolsBtn.classList.add('hidden');
     }
 }
 
@@ -1662,12 +2002,38 @@ async function handleDiscordAdminCallback() {
             roleId: DISCORD_ADMIN.roleId
         };
 
+        // 어드민 인증은 "권한"만 증명합니다. 캐릭터(직업/레벨/아바타) 미인증 상태면 한번 더 조회해서 갱신합니다.
+        await refreshCurrentUserCharacter();
+
         localStorage.setItem('rudra_user', JSON.stringify(currentUser));
         updateUserUI();
         showToast('어드민 인증 완료!');
     } catch (e) {
         console.error(e);
         showToast('디스코드 인증에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    }
+}
+
+async function refreshCurrentUserCharacter() {
+    try {
+        if (!currentUser?.name) return;
+        const data = await fetchCharacterData(currentUser.name);
+        if (!data) return;
+
+        // DPS는 유저 입력값을 우선하므로 그대로 두고, 캐릭터 프로필만 갱신
+        const keepDps = currentUser.dps || 0;
+        currentUser = {
+            ...currentUser,
+            name: data.name,
+            class: data.class,
+            level: data.level,
+            itemLevel: data.item_level,
+            avatar: data.profile_img,
+            verified: true,
+            dps: keepDps
+        };
+    } catch (e) {
+        console.error('캐릭터 정보 갱신 실패:', e);
     }
 }
 
