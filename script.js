@@ -1747,6 +1747,8 @@ const elements = {
     pointsBalanceText: document.getElementById('pointsBalanceText'),
     pointsModal: document.getElementById('pointsModal'),
     pointsCloseBtn: document.querySelector('.points-close'),
+    pointsHowtoBtn: document.getElementById('pointsHowtoBtn'),
+    pointsHowtoPanel: document.getElementById('pointsHowtoPanel'),
     pointsTabBtns: document.querySelectorAll('.points-tab-btn'),
     pointsAdminTabBtn: document.getElementById('pointsAdminTabBtn'),
     pointsEventTabBtn: document.getElementById('pointsEventTabBtn'),
@@ -1903,6 +1905,11 @@ function setupEventListeners() {
     }
     if (elements.pointsCloseBtn) {
         elements.pointsCloseBtn.addEventListener('click', closePointsModal);
+    }
+    if (elements.pointsHowtoBtn && elements.pointsHowtoPanel) {
+        elements.pointsHowtoBtn.addEventListener('click', () => {
+            elements.pointsHowtoPanel.classList.toggle('hidden');
+        });
     }
     if (elements.pointsTabBtns) {
         elements.pointsTabBtns.forEach(btn => {

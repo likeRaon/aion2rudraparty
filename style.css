@@ -441,6 +441,55 @@ input:focus, textarea:focus, select:focus {
 /* =========================================
    Points / Gacha Modal
    ========================================= */
+.points-howto {
+    margin-bottom: 14px;
+    padding: 14px;
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.04);
+}
+.points-howto-title {
+    font-weight: 900;
+    color: var(--text-main);
+    margin-bottom: 10px;
+}
+.points-howto-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.points-howto-card {
+    background: rgba(0,0,0,0.14);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius-md);
+    padding: 12px 12px;
+}
+.points-howto-card .t {
+    font-weight: 900;
+    color: var(--primary-light);
+    margin-bottom: 8px;
+}
+.points-howto-list {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text-sub);
+    line-height: 1.6;
+    font-size: 0.92rem;
+}
+.points-howto-list li { margin: 2px 0; }
+.points-howto-sub {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+.points-howto-foot {
+    margin-top: 10px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+
 .points-tabs {
     display: flex;
     gap: 8px;
@@ -651,6 +700,7 @@ input:focus, textarea:focus, select:focus {
 
 @media (max-width: 900px) {
     .points-grid { grid-template-columns: 1fr; }
+    .points-howto-grid { grid-template-columns: 1fr; }
 }
 
 /* =========================================

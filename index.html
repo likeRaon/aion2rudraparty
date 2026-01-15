@@ -646,10 +646,54 @@
     <div id="pointsModal" class="modal hidden">
         <div class="modal-content" style="max-width: 900px;">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-coins"></i> 포인트</h3>
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <h3 style="margin:0;"><i class="fa-solid fa-coins"></i> 포인트</h3>
+                    <button id="pointsHowtoBtn" class="btn-outline btn-small" type="button" style="padding: 6px 10px; font-size: 0.85rem;">
+                        <i class="fa-solid fa-circle-info"></i> 포인트 획득 방법
+                    </button>
+                </div>
                 <button class="close-btn points-close">&times;</button>
             </div>
             <div class="modal-body">
+                <div id="pointsHowtoPanel" class="points-howto hidden">
+                    <div class="points-howto-title">포인트 획득 방법 (KST 기준)</div>
+                    <div class="points-howto-grid">
+                        <div class="points-howto-card">
+                            <div class="t">출석 체크</div>
+                            <ul class="points-howto-list">
+                                <li>1회 <b>+10pt</b></li>
+                                <li>일일 최대 <b>1회</b> / 주간 최대 <b>7회</b></li>
+                            </ul>
+                        </div>
+                        <div class="points-howto-card">
+                            <div class="t">게시글 작성</div>
+                            <ul class="points-howto-list">
+                                <li>파티원 구해요: 1회 <b>+10pt</b> (일 3 / 주 21)</li>
+                                <li>파티 구해요: 1회 <b>+10pt</b> (일 3 / 주 21)</li>
+                            </ul>
+                        </div>
+                        <div class="points-howto-card">
+                            <div class="t">연속 출석 보너스</div>
+                            <ul class="points-howto-list">
+                                <li>3일 연속: <b>+10pt</b></li>
+                                <li>7일 연속: <b>+30pt</b></li>
+                                <li>14일 연속: <b>+70pt</b></li>
+                            </ul>
+                            <div class="points-howto-sub">연속이 끊기면 보너스 진행이 초기화될 수 있습니다.</div>
+                        </div>
+                        <div class="points-howto-card">
+                            <div class="t">관리자 지급/회수</div>
+                            <ul class="points-howto-list">
+                                <li>관리자가 사유를 남기고 지급/회수할 수 있습니다.</li>
+                                <li>내역은 <b>포인트 로그</b>에서 공개됩니다.</li>
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="points-howto-foot">
+                        * 포인트는 “원장(기록)” 기반으로 관리되며, 잔액/누적은 원장으로부터 계산됩니다.
+                    </div>
+                </div>
+
                 <div class="points-tabs">
                     <button class="points-tab-btn active" data-points-tab="me"><i class="fa-solid fa-user"></i> 내 포인트</button>
                     <button class="points-tab-btn" data-points-tab="gacha"><i class="fa-solid fa-dice"></i> 뽑기</button>
