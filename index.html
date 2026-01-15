@@ -149,13 +149,14 @@
                         <input type="password" id="authPassword" required placeholder="비밀번호 (6자 이상)" autocomplete="current-password">
                     </div>
 
+                    <div id="authPasswordConfirmGroup" class="form-group hidden">
+                        <label>비밀번호 확인</label>
+                        <input type="password" id="authPasswordConfirm" placeholder="비밀번호 확인" autocomplete="new-password">
+                    </div>
+
                     <div id="authNicknameGroup" class="form-group hidden">
                         <label>닉네임 (회원가입 시 1회 설정, 이후 변경 불가)</label>
                         <input type="text" id="authNickname" placeholder="사이트에서 표시될 닉네임" autocomplete="nickname">
-                        <div class="form-group" style="margin-top: 12px;">
-                            <label>비밀번호 확인</label>
-                            <input type="password" id="authPasswordConfirm" placeholder="비밀번호 확인" autocomplete="new-password">
-                        </div>
                         <p style="margin-top: 6px; color: var(--warning); font-size: 0.85rem;">
                             * 닉네임은 회원가입 후 변경할 수 없습니다.
                         </p>

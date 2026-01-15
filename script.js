@@ -10,6 +10,11 @@ const LOG_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4
 const DISCORD_POST_WEBHOOK_URL = atob(POST_WEBHOOK_SECRET);
 const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
 
+// 뽑기 당첨 알림 (Discord 특정 채널 웹훅 필요)
+// - Discord 서버에서 해당 채널에 "Webhook"을 만들고 URL을 base64로 넣으세요.
+const GACHA_WIN_WEBHOOK_SECRET = 'https://discord.com/api/webhooks/1461253087606866022/u1PYYFXAEEaNl9z16ENXMerFVSd2w_GjWSZtVgYCNTngu0vcZLYrk_kskSWYkX-857wN';
+const DISCORD_GACHA_WIN_WEBHOOK_URL = GACHA_WIN_WEBHOOK_SECRET ? atob(GACHA_WIN_WEBHOOK_SECRET) : '';
+
 const DISCORD_ADMIN = {
 
     clientId: '1440197568847151214',
@@ -735,6 +740,14 @@ async function doGachaDraw() {
 
         if (result.isWin) {
             showToast(`<i class="fa-solid fa-trophy"></i> 당첨! (확률 초기화)`);
+            launchConfetti();
+            sendGachaWinToDiscord([
+                '🎉 **뽑기 당첨!**',
+                `- 닉네임: ${currentUser?.name || ''}`,
+                `- uid: ${currentUser?.uid || ''}`,
+                `- 적용 확률: ${fmtRate(result.appliedRate)} (당첨 전 누적 ${fmtInt(result.pity)}회)`,
+                `- 시각(KST): ${formatKst(new Date().toISOString()) || ''}`
+            ].join('\n'));
         } else {
             showToast(`<i class="fa-solid fa-dice"></i> 뽑기 완료`);
         }
@@ -744,6 +757,42 @@ async function doGachaDraw() {
         console.error(e);
         alert('뽑기 처리 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
     }
+}
+
+function launchConfetti() {
+    const container = document.createElement('div');
+    container.className = 'confetti-container';
+    document.body.appendChild(container);
+
+    const colors = ['#a78bfa', '#8b5cf6', '#22c55e', '#fbbf24', '#60a5fa', '#f472b6'];
+    const count = 90;
+
+    for (let i = 0; i < count; i++) {
+        const p = document.createElement('div');
+        p.className = 'confetti-piece';
+        const left = Math.random() * 100;
+        const dx = (Math.random() - 0.5) * 260;
+        const rot = (Math.random() - 0.5) * 720;
+        const delay = Math.random() * 180;
+        const dur = 900 + Math.random() * 700;
+        const w = 6 + Math.random() * 10;
+        const h = 8 + Math.random() * 14;
+
+        p.style.left = `${left}vw`;
+        p.style.background = colors[i % colors.length];
+        p.style.width = `${w}px`;
+        p.style.height = `${h}px`;
+        p.style.borderRadius = `${Math.random() * 4}px`;
+        p.style.setProperty('--x', `${dx}px`);
+        p.style.setProperty('--r', `${rot}deg`);
+        p.style.animationDelay = `${delay}ms`;
+        p.style.animationDuration = `${dur}ms`;
+        container.appendChild(p);
+    }
+
+    setTimeout(() => {
+        container.remove();
+    }, 2500);
 }
 
 async function loadPointsRanking() {
@@ -948,7 +997,9 @@ async function adminAdjustPoints() {
             const sum = sSnap.exists ? sSnap.data() : {};
             const balance = Number(sum?.balance) || 0;
             const lifetime = Number(sum?.lifetimeEarned) || 0;
-            const earnedDelta = delta > 0 ? delta : 0;
+            // 관리자 회수도 "누적 획득"에서 차감 처리(요구사항)
+            // 단, 뽑기/일반 소모는 lifetimeEarned에 영향을 주지 않음(ADMIN_ADJUST만 여기서 처리)
+            const nextLifetime = Math.max(0, lifetime + delta);
 
             tx.set(targetLedgerRef, {
                 userId: targetUserId,
@@ -981,7 +1032,7 @@ async function adminAdjustPoints() {
                 userId: targetUserId,
                 userNickname: targetNick,
                 balance: balance + delta,
-                lifetimeEarned: lifetime + earnedDelta,
+                lifetimeEarned: nextLifetime,
                 updatedAt: nowIso
             }, { merge: true });
         });
@@ -1063,6 +1114,21 @@ async function sendLogToDiscord(lines) {
         });
     } catch (e) {
         console.error("로그 웹훅 전송 실패:", e);
+    }
+}
+
+async function sendGachaWinToDiscord(payload) {
+    if (!DISCORD_GACHA_WIN_WEBHOOK_URL) return;
+    try {
+        const content = String(payload || '').trim();
+        if (!content) return;
+        await fetch(`${DISCORD_GACHA_WIN_WEBHOOK_URL}?wait=false`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+        });
+    } catch (e) {
+        console.error("뽑기 당첨 웹훅 전송 실패:", e);
     }
 }
 
@@ -1320,6 +1386,7 @@ const elements = {
     authPassword: document.getElementById('authPassword'),
     authPasswordConfirm: document.getElementById('authPasswordConfirm'),
     authRememberMe: document.getElementById('authRememberMe'),
+    authPasswordConfirmGroup: document.getElementById('authPasswordConfirmGroup'),
     loginBtn: document.getElementById('loginBtn'),
     userInfo: document.getElementById('userInfo'),
     userNickname: document.getElementById('userNickname'),
@@ -2564,6 +2631,7 @@ function setAuthMode(mode) {
     if (elements.authModalTitle) elements.authModalTitle.textContent = isSignup ? '회원가입' : '로그인';
     if (elements.authSubmitBtn) elements.authSubmitBtn.textContent = isSignup ? '회원가입' : '로그인';
     if (elements.authNicknameGroup) elements.authNicknameGroup.classList.toggle('hidden', !isSignup);
+    if (elements.authPasswordConfirmGroup) elements.authPasswordConfirmGroup.classList.toggle('hidden', !isSignup);
     if (elements.authHelpText) {
         elements.authHelpText.innerHTML = isSignup
             ? '회원가입 후 닉네임은 <b>변경할 수 없습니다</b>.<br>포인트 기능은 <b>관리자 승인</b> 후 사용할 수 있습니다.'
@@ -2575,11 +2643,7 @@ function setAuthMode(mode) {
     }
 
     // 비밀번호 확인(회원가입만)
-    if (elements.authPasswordConfirm) {
-        elements.authPasswordConfirm.value = '';
-        const grp = elements.authPasswordConfirm.closest('.form-group');
-        if (grp) grp.classList.toggle('hidden', !isSignup);
-    }
+    if (elements.authPasswordConfirm) elements.authPasswordConfirm.value = '';
 }
 
 async function initAuth() {
