@@ -29,6 +29,9 @@
                 <button id="loginBtn" class="btn-outline">로그인</button>
                 <div id="userInfo" class="hidden" style="display: flex; align-items: center; gap: 10px;">
                     <span id="userNickname" style="font-weight: 700;"></span>
+                    <button id="pointsOpenBtn" class="btn-outline" style="padding: 4px 10px; font-size: 0.8rem;">
+                        <i class="fa-solid fa-coins"></i> <span id="pointsBalanceText">0pt</span>
+                    </button>
                     <span id="adminBadge" class="hidden" style="padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; background: rgba(34, 197, 94, 0.14); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3);">관리자</span>
                     <button id="adminToolsBtn" class="btn-outline hidden" style="padding: 4px 10px; font-size: 0.8rem;">
                         <i class="fa-solid fa-screwdriver-wrench"></i> 관리자 도구
@@ -62,11 +65,11 @@
             <main class="board-section">
                 <!-- 게시판 탭 -->
                 <div class="board-tabs">
-                    <button class="tab-btn" data-tab="all">
+                    <button class="tab-btn active" data-tab="all">
                         <i class="fa-solid fa-layer-group"></i> 전체
                         <span class="sub-text">(모든 모집/구직)</span>
                     </button>
-                    <button class="tab-btn active" data-tab="party">
+                    <button class="tab-btn" data-tab="party">
                         <i class="fa-solid fa-users"></i> 파티원 구해요
                         <span class="sub-text">(파티원이 필요해요)</span>
                     </button>
@@ -598,6 +601,126 @@
                         - 삭제된 글을 다시 보이게 하려면(soft delete) `deletedAt`을 제거하는 업데이트가 필요합니다.
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 포인트/뽑기 모달 -->
+    <div id="pointsModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-coins"></i> 포인트</h3>
+                <button class="close-btn points-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="points-tabs">
+                    <button class="points-tab-btn active" data-points-tab="me"><i class="fa-solid fa-user"></i> 내 포인트</button>
+                    <button class="points-tab-btn" data-points-tab="gacha"><i class="fa-solid fa-dice"></i> 뽑기</button>
+                    <button class="points-tab-btn" data-points-tab="ranking"><i class="fa-solid fa-ranking-star"></i> 랭킹</button>
+                    <button class="points-tab-btn" data-points-tab="publicLog"><i class="fa-solid fa-scale-balanced"></i> 포인트 로그</button>
+                    <button id="pointsAdminTabBtn" class="points-tab-btn hidden" data-points-tab="admin"><i class="fa-solid fa-screwdriver-wrench"></i> 관리자</button>
+                </div>
+
+                <div id="pointsTabMe" class="points-tab-panel">
+                    <div class="points-grid">
+                        <div class="points-card">
+                            <div class="points-card-title">요약</div>
+                            <div class="points-kv">
+                                <div><span class="k">현재 보유</span><span id="pointsMeBalance" class="v">0</span></div>
+                                <div><span class="k">누적 획득</span><span id="pointsMeLifetime" class="v">0</span></div>
+                            </div>
+                            <div class="points-actions">
+                                <button id="attendanceBtn" class="btn-success"><i class="fa-solid fa-calendar-check"></i> 출석 체크 (+10)</button>
+                                <button id="pointsRefreshBtn" class="btn-outline"><i class="fa-solid fa-rotate"></i> 새로고침</button>
+                            </div>
+                            <div id="streakBox" class="streak-box">
+                                <div class="streak-top">
+                                    <div class="streak-title">연속 출석</div>
+                                    <div id="streakToday" class="streak-today">오늘: -</div>
+                                </div>
+                                <div class="streak-main">
+                                    <div><span class="k">현재</span> <span id="streakDays" class="v">0</span>일</div>
+                                    <div><span class="k">다음 보상</span> <span id="streakNext" class="v">-</span></div>
+                                </div>
+                                <div class="streak-progress">
+                                    <div class="bar"><div id="streakBar" class="bar-fill" style="width:0%"></div></div>
+                                    <div id="streakHint" class="hint">-</div>
+                                </div>
+                            </div>
+                            <div class="points-hint">
+                                - 일/주 제한은 KST 기준으로 계산됩니다.<br>
+                                - 포인트는 원장(트랜잭션) 기반이며, 요약값은 표시/랭킹용 캐시입니다.
+                            </div>
+                        </div>
+
+                        <div class="points-card">
+                            <div class="points-card-title">최근 원장</div>
+                            <div id="pointsLedgerList" class="points-list">
+                                <div class="points-empty">로그인을 하면 원장이 표시됩니다.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="pointsTabGacha" class="points-tab-panel hidden">
+                    <div class="points-card">
+                        <div class="points-card-title">뽑기</div>
+                        <div class="points-kv">
+                            <div><span class="k">1회 비용</span><span class="v">300pt</span></div>
+                            <div><span class="k">기본 확률</span><span class="v">0.1%</span></div>
+                            <div><span class="k">내 누적 뽑기</span><span id="gachaTotalDraws" class="v">0</span></div>
+                            <div><span class="k">이번 적용 확률</span><span id="gachaAppliedRate" class="v">0.1%</span></div>
+                        </div>
+                        <div class="points-actions">
+                            <button id="gachaDrawBtn" class="btn-primary"><i class="fa-solid fa-dice"></i> 1회 뽑기</button>
+                            <button id="gachaRefreshBtn" class="btn-outline"><i class="fa-solid fa-rotate"></i> 새로고침</button>
+                        </div>
+                        <div id="gachaResult" class="points-result-box hidden"></div>
+                    </div>
+                </div>
+
+                <div id="pointsTabRanking" class="points-tab-panel hidden">
+                    <div class="points-card">
+                        <div class="points-card-title">누적 획득 포인트 랭킹</div>
+                        <div id="pointsRankingList" class="points-list">
+                            <div class="points-empty">불러오는 중...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="pointsTabPublicLog" class="points-tab-panel hidden">
+                    <div class="points-card">
+                        <div class="points-card-title">관리자 지급/회수 공개 로그</div>
+                        <div id="pointsPublicAdminLogList" class="points-list">
+                            <div class="points-empty">불러오는 중...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="pointsTabAdmin" class="points-tab-panel hidden">
+                    <div class="points-card">
+                        <div class="points-card-title">관리자 포인트 지급/회수</div>
+                        <div class="points-admin-form">
+                            <div class="form-group">
+                                <label>대상 유저 닉네임</label>
+                                <input type="text" id="adminAdjustTarget" placeholder="예: 캐릭터닉네임">
+                            </div>
+                            <div class="form-group">
+                                <label>포인트 변경(+) 지급 / (-) 회수</label>
+                                <input type="number" id="adminAdjustDelta" placeholder="예: 100 또는 -100">
+                            </div>
+                            <div class="form-group">
+                                <label>사유(필수)</label>
+                                <input type="text" id="adminAdjustReason" placeholder="사유를 입력하세요">
+                            </div>
+                            <button id="adminAdjustSubmitBtn" class="btn-danger full-width"><i class="fa-solid fa-gavel"></i> 적용</button>
+                            <div class="points-hint" style="margin-top:10px;">
+                                - 이 기능은 UI상 관리자 전용이며, 실제 보안 강제는 서버/Firestore Rules가 필요합니다.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>

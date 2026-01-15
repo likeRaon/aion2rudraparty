@@ -24,6 +24,829 @@ const CONSTANTS = {
     NOTICE_LIMIT: 3
 };
 
+// =========================
+// Points / Gacha (Firestore 기반)
+// =========================
+const POINTS = {
+    COST_GACHA: 300,
+    BASE_RATE: 0.001, // 0.1%
+    EARN: {
+        ATTENDANCE: 10,
+        POST: 10,
+        STREAK_3: 10,
+        STREAK_7: 30,
+        STREAK_14: 70
+    },
+    LIMITS: {
+        ATTENDANCE: { daily: 1, weekly: 7 },
+        POST_PARTY: { daily: 3, weekly: 21 },  // 파티원 구해요
+        POST_MEMBER: { daily: 3, weekly: 21 }  // 파티 구해요
+    }
+};
+
+const FIRESTORE_POINTS = {
+    summary: 'user_point_summary',
+    state: 'point_state',
+    counters: 'point_counters',
+    ledgerUsers: 'point_ledger_users',
+    publicAdminLog: 'public_point_admin_log',
+    gachaDrawsUsers: 'gacha_draws_users'
+};
+
+function base64UrlFromUtf8(str) {
+    // btoa는 유니코드 직접 처리 불가 → UTF-8로 변환 후 base64url
+    const b64 = btoa(unescape(encodeURIComponent(String(str || ''))));
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function userIdFromNickname(nickname) {
+    const n = String(nickname || '').trim();
+    if (!n) return null;
+    return `u_${base64UrlFromUtf8(n.toLowerCase())}`;
+}
+
+function getKstDateKeyFromNow() {
+    // KST는 UTC+9 고정(서머타임 없음). "지금"을 +9h shift한 뒤 UTC 기준 날짜를 key로 사용.
+    const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function getIsoWeekKeyFromKstNow() {
+    const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    // ISO week (Mon=1..Sun=7), Thursday 기준으로 연도/주차 결정
+    const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    const day = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function getPointsRefsForUser(userId) {
+    const summaryRef = db.collection(FIRESTORE_POINTS.summary).doc(userId);
+    const stateRef = db.collection(FIRESTORE_POINTS.state).doc(userId);
+    const ledgerCol = db.collection(FIRESTORE_POINTS.ledgerUsers).doc(userId).collection('items');
+    const drawsCol = db.collection(FIRESTORE_POINTS.gachaDrawsUsers).doc(userId).collection('items');
+    return { summaryRef, stateRef, ledgerCol, drawsCol };
+}
+
+async function ensurePointDocsForCurrentUser() {
+    if (!db) return;
+    if (!currentUser?.name) return;
+
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+    const { summaryRef, stateRef } = getPointsRefsForUser(userId);
+
+    try {
+        await db.runTransaction(async (tx) => {
+            const [sSnap, stSnap] = await Promise.all([tx.get(summaryRef), tx.get(stateRef)]);
+            const nowIso = new Date().toISOString();
+
+            if (!sSnap.exists) {
+                tx.set(summaryRef, {
+                    userId,
+                    userNickname: currentUser.name,
+                    balance: 0,
+                    lifetimeEarned: 0,
+                    updatedAt: nowIso
+                });
+            } else {
+                tx.set(summaryRef, { userNickname: currentUser.name, updatedAt: nowIso }, { merge: true });
+            }
+
+            if (!stSnap.exists) {
+                tx.set(stateRef, {
+                    userId,
+                    userNickname: currentUser.name,
+                    lastCheckinKstDate: null,
+                    currentStreakDays: 0,
+                    claimed3: false,
+                    claimed7: false,
+                    claimed14: false,
+                    totalDraws: 0,
+                    totalWins: 0,
+                    updatedAt: nowIso
+                });
+            } else {
+                tx.set(stateRef, { userNickname: currentUser.name, updatedAt: nowIso }, { merge: true });
+            }
+        });
+    } catch (e) {
+        console.error('포인트 초기화 실패:', e);
+    }
+}
+
+function pointsTypeLabel(type) {
+    switch (type) {
+        case 'EARN_ATTENDANCE': return '출석 체크';
+        case 'EARN_POST_PARTY': return '파티원 구해요 글 작성';
+        case 'EARN_POST_MEMBER': return '파티 구해요 글 작성';
+        case 'EARN_STREAK_3': return '3일 연속 출석 보너스';
+        case 'EARN_STREAK_7': return '7일 연속 출석 보너스';
+        case 'EARN_STREAK_14': return '14일 연속 출석 보너스';
+        case 'SPEND_GACHA': return '뽑기 1회';
+        case 'ADMIN_ADJUST': return '관리자 지급/회수';
+        default: return type || '';
+    }
+}
+
+function fmtInt(n) {
+    const x = Number(n) || 0;
+    return Math.floor(x).toLocaleString();
+}
+
+function fmtRate(rate) {
+    const r = Number(rate) || 0;
+    return `${(r * 100).toFixed(1)}%`;
+}
+
+function addDaysToDateKey(dateKey, deltaDays) {
+    const [y, m, d] = String(dateKey || '').split('-').map(v => parseInt(v, 10));
+    if (!y || !m || !d) return null;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + (Number(deltaDays) || 0));
+    return dt.toISOString().slice(0, 10);
+}
+
+async function refreshPointsHeader() {
+    if (!elements.pointsBalanceText) return;
+    if (!db || !currentUser?.name) {
+        elements.pointsBalanceText.textContent = '0pt';
+        return;
+    }
+
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) {
+        elements.pointsBalanceText.textContent = '0pt';
+        return;
+    }
+
+    try {
+        const snap = await db.collection(FIRESTORE_POINTS.summary).doc(userId).get();
+        const balance = snap.exists ? (snap.data()?.balance || 0) : 0;
+        elements.pointsBalanceText.textContent = `${fmtInt(balance)}pt`;
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function closePointsModal() {
+    if (!elements.pointsModal) return;
+    elements.pointsModal.classList.add('hidden');
+}
+
+function setPointsTabActive(tab) {
+    if (!elements.pointsTabBtns) return;
+    elements.pointsTabBtns.forEach(b => b.classList.toggle('active', b.dataset.pointsTab === tab));
+
+    if (elements.pointsTabMe) elements.pointsTabMe.classList.toggle('hidden', tab !== 'me');
+    if (elements.pointsTabGacha) elements.pointsTabGacha.classList.toggle('hidden', tab !== 'gacha');
+    if (elements.pointsTabRanking) elements.pointsTabRanking.classList.toggle('hidden', tab !== 'ranking');
+    if (elements.pointsTabPublicLog) elements.pointsTabPublicLog.classList.toggle('hidden', tab !== 'publicLog');
+    if (elements.pointsTabAdmin) elements.pointsTabAdmin.classList.toggle('hidden', tab !== 'admin');
+}
+
+async function switchPointsTab(tab) {
+    setPointsTabActive(tab);
+    if (tab === 'ranking') await loadPointsRanking();
+    if (tab === 'publicLog') await loadPointsPublicAdminLog();
+    if (tab === 'gacha') await refreshGachaPanel();
+}
+
+async function openPointsModal() {
+    if (!currentUser) {
+        alert('닉네임 로그인 후 이용 가능합니다.');
+        elements.authModal?.classList.remove('hidden');
+        return;
+    }
+    if (!db) {
+        alert('DB 연결 설정이 필요합니다.');
+        return;
+    }
+    if (!elements.pointsModal) return;
+
+    elements.pointsModal.classList.remove('hidden');
+    setPointsTabActive('me');
+
+    await ensurePointDocsForCurrentUser();
+    await refreshPointsAll();
+}
+
+async function refreshPointsAll(opts = {}) {
+    if (!db || !currentUser?.name) return;
+    await Promise.all([
+        refreshPointsHeader(),
+        refreshPointsMePanel(),
+        loadMyPointLedger(),
+        refreshGachaPanel()
+    ]);
+    if (opts.showToastOnDone) showToast(`<i class="fa-solid fa-rotate"></i> 포인트 정보를 갱신했습니다.`);
+}
+
+async function refreshPointsMePanel() {
+    if (!db || !currentUser?.name) return;
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+
+    const summaryRef = db.collection(FIRESTORE_POINTS.summary).doc(userId);
+    const stateRef = db.collection(FIRESTORE_POINTS.state).doc(userId);
+    const kstDate = getKstDateKeyFromNow();
+
+    try {
+        const [sSnap, stSnap] = await Promise.all([summaryRef.get(), stateRef.get()]);
+        const s = sSnap.exists ? sSnap.data() : {};
+        const st = stSnap.exists ? stSnap.data() : {};
+
+        const balance = Number(s?.balance) || 0;
+        const lifetime = Number(s?.lifetimeEarned) || 0;
+        if (elements.pointsMeBalance) elements.pointsMeBalance.textContent = `${fmtInt(balance)}pt`;
+        if (elements.pointsMeLifetime) elements.pointsMeLifetime.textContent = `${fmtInt(lifetime)}pt`;
+
+        const last = st?.lastCheckinKstDate || null;
+        const streakDays = Number(st?.currentStreakDays) || 0;
+        const claimed3 = !!st?.claimed3;
+        const claimed7 = !!st?.claimed7;
+        const claimed14 = !!st?.claimed14;
+
+        const hasToday = last === kstDate;
+        if (elements.streakToday) elements.streakToday.textContent = `오늘: ${hasToday ? '완료' : '미완료'} (KST ${kstDate})`;
+        if (elements.streakDays) elements.streakDays.textContent = String(streakDays);
+
+        let nextTarget = null;
+        if (!claimed3) nextTarget = 3;
+        else if (!claimed7) nextTarget = 7;
+        else if (!claimed14) nextTarget = 14;
+
+        if (elements.streakNext) {
+            elements.streakNext.textContent = nextTarget ? `${nextTarget}일` : '-';
+        }
+
+        const prog = nextTarget ? Math.min(streakDays, nextTarget) / nextTarget : 1;
+        if (elements.streakBar) elements.streakBar.style.width = `${Math.round(prog * 100)}%`;
+        if (elements.streakHint) {
+            if (!nextTarget) elements.streakHint.textContent = '14일 보너스까지 모두 달성했습니다.';
+            else if (streakDays >= nextTarget) elements.streakHint.textContent = '다음 출석 시 보너스가 이미 조건을 만족하면 즉시 지급됩니다.';
+            else elements.streakHint.textContent = `${nextTarget - streakDays}일 더 출석하면 보너스를 받을 수 있어요.`;
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+function renderLedgerRows(list) {
+    if (!elements.pointsLedgerList) return;
+    if (!list.length) {
+        elements.pointsLedgerList.innerHTML = `<div class="points-empty">표시할 원장 내역이 없습니다.</div>`;
+        return;
+    }
+
+    elements.pointsLedgerList.innerHTML = list.map(it => {
+        const delta = Number(it.delta) || 0;
+        const plus = delta >= 0;
+        const title = pointsTypeLabel(it.type);
+        const when = it.kstDate ? `KST ${it.kstDate}` : '';
+        const kst = it.createdAt ? (formatKst(it.createdAt) || '') : '';
+        const reason = it.reasonText ? `사유: ${it.reasonText}` : '';
+        const ref = it.refType && it.refId ? `ref: ${it.refType}/${it.refId}` : '';
+
+        const meta = [when, kst ? `(${kst})` : null, reason, ref].filter(Boolean).join('\n');
+        return `
+            <div class="points-row">
+                <div class="left">
+                    <div class="title">${escapeHtml(title)}</div>
+                    <div class="meta">${escapeHtml(meta)}</div>
+                </div>
+                <div class="delta ${plus ? 'plus' : 'minus'}">${plus ? '+' : ''}${fmtInt(delta)}pt</div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function loadMyPointLedger() {
+    if (!db || !currentUser?.name || !elements.pointsLedgerList) return;
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+    const { ledgerCol } = getPointsRefsForUser(userId);
+
+    try {
+        const snap = await ledgerCol.orderBy('createdAt', 'desc').limit(20).get();
+        const list = [];
+        snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+        renderLedgerRows(list);
+    } catch (e) {
+        console.error(e);
+        elements.pointsLedgerList.innerHTML = `<div class="points-empty">원장 로드 실패: 인덱스/권한 설정을 확인해주세요.</div>`;
+    }
+}
+
+async function doAttendanceCheck() {
+    if (!db) return alert('DB 연결이 필요합니다.');
+    if (!currentUser?.name) return alert('로그인 후 이용 가능합니다.');
+
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+    const nowIso = new Date().toISOString();
+
+    const { summaryRef, stateRef, ledgerCol } = getPointsRefsForUser(userId);
+    const ledgerRef = ledgerCol.doc(`EARN_ATTENDANCE__${kstDate}`);
+    const dailyRef = db.collection(FIRESTORE_POINTS.counters).doc(`D__${userId}__ATTENDANCE__${kstDate}`);
+    const weeklyRef = db.collection(FIRESTORE_POINTS.counters).doc(`W__${userId}__ATTENDANCE__${weekKey}`);
+
+    const yesterday = addDaysToDateKey(kstDate, -1);
+
+    try {
+        const result = await db.runTransaction(async (tx) => {
+            const [ledgerSnap, dSnap, wSnap, sSnap, stSnap] = await Promise.all([
+                tx.get(ledgerRef),
+                tx.get(dailyRef),
+                tx.get(weeklyRef),
+                tx.get(summaryRef),
+                tx.get(stateRef)
+            ]);
+
+            if (ledgerSnap.exists) return { ok: false, code: 'already' };
+
+            const dailyCount = Number(dSnap.exists ? dSnap.data()?.count : 0) || 0;
+            const weeklyCount = Number(wSnap.exists ? wSnap.data()?.count : 0) || 0;
+            if (dailyCount >= POINTS.LIMITS.ATTENDANCE.daily) return { ok: false, code: 'daily_limit' };
+            if (weeklyCount >= POINTS.LIMITS.ATTENDANCE.weekly) return { ok: false, code: 'weekly_limit' };
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const curBalance = Number(sum?.balance) || 0;
+            const curLifetime = Number(sum?.lifetimeEarned) || 0;
+
+            // 출석 10pt 지급
+            tx.set(ledgerRef, {
+                userId,
+                userNickname: currentUser.name,
+                type: 'EARN_ATTENDANCE',
+                delta: POINTS.EARN.ATTENDANCE,
+                refType: 'attendance',
+                refId: kstDate,
+                reasonText: null,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            tx.set(dailyRef, { userId, action: 'ATTENDANCE', scope: 'D', key: kstDate, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+            tx.set(weeklyRef, { userId, action: 'ATTENDANCE', scope: 'W', key: weekKey, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+
+            tx.set(summaryRef, {
+                userId,
+                userNickname: currentUser.name,
+                balance: curBalance + POINTS.EARN.ATTENDANCE,
+                lifetimeEarned: curLifetime + POINTS.EARN.ATTENDANCE,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            // 연속 출석 상태 갱신 + 보너스
+            const st = stSnap.exists ? stSnap.data() : {};
+            const last = st?.lastCheckinKstDate || null;
+            let streakDays = Number(st?.currentStreakDays) || 0;
+            let claimed3 = !!st?.claimed3;
+            let claimed7 = !!st?.claimed7;
+            let claimed14 = !!st?.claimed14;
+
+            if (last === yesterday) {
+                streakDays += 1;
+            } else {
+                streakDays = 1;
+                claimed3 = false;
+                claimed7 = false;
+                claimed14 = false;
+            }
+
+            let bonusTotal = 0;
+
+            const tryBonus = async (milestone, delta, claimedKey) => {
+                if (streakDays < milestone) return;
+                if (claimedKey === 'claimed3' && claimed3) return;
+                if (claimedKey === 'claimed7' && claimed7) return;
+                if (claimedKey === 'claimed14' && claimed14) return;
+
+                const bonusRef = ledgerCol.doc(`EARN_STREAK_${milestone}__${kstDate}`);
+                const bonusSnap = await tx.get(bonusRef);
+                if (bonusSnap.exists) return;
+
+                tx.set(bonusRef, {
+                    userId,
+                    userNickname: currentUser.name,
+                    type: `EARN_STREAK_${milestone}`,
+                    delta,
+                    refType: 'attendance_streak',
+                    refId: String(milestone),
+                    reasonText: null,
+                    createdAt: nowIso,
+                    kstDate,
+                    kstWeekKey: weekKey
+                });
+
+                bonusTotal += delta;
+                if (claimedKey === 'claimed3') claimed3 = true;
+                if (claimedKey === 'claimed7') claimed7 = true;
+                if (claimedKey === 'claimed14') claimed14 = true;
+            };
+
+            await tryBonus(3, POINTS.EARN.STREAK_3, 'claimed3');
+            await tryBonus(7, POINTS.EARN.STREAK_7, 'claimed7');
+            await tryBonus(14, POINTS.EARN.STREAK_14, 'claimed14');
+
+            if (bonusTotal > 0) {
+                tx.set(summaryRef, {
+                    balance: curBalance + POINTS.EARN.ATTENDANCE + bonusTotal,
+                    lifetimeEarned: curLifetime + POINTS.EARN.ATTENDANCE + bonusTotal,
+                    updatedAt: nowIso
+                }, { merge: true });
+            }
+
+            tx.set(stateRef, {
+                userId,
+                userNickname: currentUser.name,
+                lastCheckinKstDate: kstDate,
+                currentStreakDays: streakDays,
+                claimed3,
+                claimed7,
+                claimed14,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            return { ok: true, streakDays, bonusTotal };
+        });
+
+        if (!result?.ok) {
+            if (result.code === 'already') return showToast(`<i class="fa-solid fa-circle-info"></i> 오늘은 이미 출석 체크를 했습니다.`);
+            if (result.code === 'daily_limit') return showToast(`<i class="fa-solid fa-circle-info"></i> 출석은 일일 최대 1회입니다.`);
+            if (result.code === 'weekly_limit') return showToast(`<i class="fa-solid fa-circle-info"></i> 출석은 주간 최대 7회입니다.`);
+            return showToast(`<i class="fa-solid fa-circle-info"></i> 출석 처리에 실패했습니다.`);
+        }
+
+        const bonusMsg = result.bonusTotal > 0 ? ` (+보너스 ${fmtInt(result.bonusTotal)}pt)` : '';
+        showToast(`<i class="fa-solid fa-calendar-check"></i> 출석 완료 +${POINTS.EARN.ATTENDANCE}pt${bonusMsg}`);
+        await refreshPointsAll();
+    } catch (e) {
+        console.error(e);
+        alert('출석 처리 중 오류가 발생했습니다.');
+    }
+}
+
+async function awardPostCreatePoints(postType, postId) {
+    if (!db || !currentUser?.name) return;
+    if (!postId) return;
+
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+    const nowIso = new Date().toISOString();
+
+    const isParty = postType === 'party';   // 파티원 구해요
+    const isMember = postType === 'member'; // 파티 구해요
+    if (!isParty && !isMember) return;
+
+    const actionKey = isParty ? 'POST_PARTY' : 'POST_MEMBER';
+    const limits = isParty ? POINTS.LIMITS.POST_PARTY : POINTS.LIMITS.POST_MEMBER;
+    const type = isParty ? 'EARN_POST_PARTY' : 'EARN_POST_MEMBER';
+
+    const { summaryRef, ledgerCol } = getPointsRefsForUser(userId);
+    const ledgerRef = ledgerCol.doc(`${type}__${postId}`);
+    const dailyRef = db.collection(FIRESTORE_POINTS.counters).doc(`D__${userId}__${actionKey}__${kstDate}`);
+    const weeklyRef = db.collection(FIRESTORE_POINTS.counters).doc(`W__${userId}__${actionKey}__${weekKey}`);
+
+    try {
+        const res = await db.runTransaction(async (tx) => {
+            const [lSnap, dSnap, wSnap, sSnap] = await Promise.all([
+                tx.get(ledgerRef),
+                tx.get(dailyRef),
+                tx.get(weeklyRef),
+                tx.get(summaryRef)
+            ]);
+
+            if (lSnap.exists) return { ok: false, code: 'already' };
+            const dailyCount = Number(dSnap.exists ? dSnap.data()?.count : 0) || 0;
+            const weeklyCount = Number(wSnap.exists ? wSnap.data()?.count : 0) || 0;
+            if (dailyCount >= limits.daily) return { ok: false, code: 'daily_limit' };
+            if (weeklyCount >= limits.weekly) return { ok: false, code: 'weekly_limit' };
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const curBalance = Number(sum?.balance) || 0;
+            const curLifetime = Number(sum?.lifetimeEarned) || 0;
+
+            tx.set(ledgerRef, {
+                userId,
+                userNickname: currentUser.name,
+                type,
+                delta: POINTS.EARN.POST,
+                refType: 'post',
+                refId: String(postId),
+                reasonText: null,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            tx.set(dailyRef, { userId, action: actionKey, scope: 'D', key: kstDate, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+            tx.set(weeklyRef, { userId, action: actionKey, scope: 'W', key: weekKey, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+
+            tx.set(summaryRef, {
+                userId,
+                userNickname: currentUser.name,
+                balance: curBalance + POINTS.EARN.POST,
+                lifetimeEarned: curLifetime + POINTS.EARN.POST,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            return { ok: true };
+        });
+
+        if (res?.ok) {
+            showToast(`<i class="fa-solid fa-coins"></i> 포인트 +${POINTS.EARN.POST}pt (글 작성)`);
+            await refreshPointsHeader();
+        }
+    } catch (e) {
+        console.error('게시글 포인트 지급 실패:', e);
+    }
+}
+
+async function refreshGachaPanel(opts = {}) {
+    if (!db || !currentUser?.name) return;
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+
+    const stateRef = db.collection(FIRESTORE_POINTS.state).doc(userId);
+    try {
+        const snap = await stateRef.get();
+        const st = snap.exists ? snap.data() : {};
+        const totalDraws = Number(st?.totalDraws) || 0;
+        const rate = Math.min(POINTS.BASE_RATE * (1 + totalDraws), 1);
+
+        if (elements.gachaTotalDraws) elements.gachaTotalDraws.textContent = fmtInt(totalDraws);
+        if (elements.gachaAppliedRate) elements.gachaAppliedRate.textContent = fmtRate(rate);
+        if (opts.showToastOnDone) showToast(`<i class="fa-solid fa-rotate"></i> 뽑기 정보를 갱신했습니다.`);
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function doGachaDraw() {
+    if (!db) return alert('DB 연결이 필요합니다.');
+    if (!currentUser?.name) return alert('로그인 후 이용 가능합니다.');
+
+    const userId = userIdFromNickname(currentUser.name);
+    if (!userId) return;
+
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+    const nowIso = new Date().toISOString();
+
+    const { summaryRef, stateRef, ledgerCol, drawsCol } = getPointsRefsForUser(userId);
+    const drawId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const spendLedgerRef = ledgerCol.doc(`SPEND_GACHA__${drawId}`);
+    const drawRef = drawsCol.doc(drawId);
+
+    try {
+        const result = await db.runTransaction(async (tx) => {
+            const [sSnap, stSnap, spendSnap] = await Promise.all([tx.get(summaryRef), tx.get(stateRef), tx.get(spendLedgerRef)]);
+            if (spendSnap.exists) return { ok: false, code: 'already' };
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const balance = Number(sum?.balance) || 0;
+            if (balance < POINTS.COST_GACHA) return { ok: false, code: 'insufficient' };
+
+            const st = stSnap.exists ? stSnap.data() : {};
+            const beforeDraws = Number(st?.totalDraws) || 0;
+            const appliedRate = Math.min(POINTS.BASE_RATE * (1 + beforeDraws), 1);
+
+            const u = new Uint32Array(1);
+            crypto.getRandomValues(u);
+            const roll = u[0] % 1000000; // 0..999999
+            const winThreshold = Math.floor(appliedRate * 1000000);
+            const isWin = roll < winThreshold;
+
+            // 결제 원장
+            tx.set(spendLedgerRef, {
+                userId,
+                userNickname: currentUser.name,
+                type: 'SPEND_GACHA',
+                delta: -POINTS.COST_GACHA,
+                refType: 'gacha_draw',
+                refId: drawId,
+                reasonText: null,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            // 뽑기 결과 기록
+            tx.set(drawRef, {
+                userId,
+                userNickname: currentUser.name,
+                createdAt: nowIso,
+                kstDate,
+                costPoints: POINTS.COST_GACHA,
+                baseRate: POINTS.BASE_RATE,
+                appliedRate,
+                userTotalDrawsBefore: beforeDraws,
+                rngRoll: roll,
+                isWin
+            });
+
+            // 요약 갱신 (누적 획득은 증가하지 않음)
+            tx.set(summaryRef, {
+                userId,
+                userNickname: currentUser.name,
+                balance: balance - POINTS.COST_GACHA,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            tx.set(stateRef, {
+                userId,
+                userNickname: currentUser.name,
+                totalDraws: beforeDraws + 1,
+                totalWins: (Number(st?.totalWins) || 0) + (isWin ? 1 : 0),
+                updatedAt: nowIso
+            }, { merge: true });
+
+            return { ok: true, appliedRate, beforeDraws, roll, isWin };
+        });
+
+        if (!result?.ok) {
+            if (result.code === 'insufficient') return showToast(`<i class="fa-solid fa-circle-info"></i> 포인트가 부족합니다. (필요 ${POINTS.COST_GACHA}pt)`);
+            return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기에 실패했습니다.`);
+        }
+
+        const msg =
+            `결과: ${result.isWin ? '당첨' : '꽝'}\n` +
+            `이번 적용 확률: ${fmtRate(result.appliedRate)} (이전 누적 ${fmtInt(result.beforeDraws)}회)\n` +
+            `roll: ${result.roll} / 999999`;
+
+        if (elements.gachaResult) {
+            elements.gachaResult.classList.remove('hidden');
+            elements.gachaResult.textContent = msg;
+        }
+
+        await refreshPointsAll();
+    } catch (e) {
+        console.error(e);
+        alert('뽑기 처리 중 오류가 발생했습니다.');
+    }
+}
+
+async function loadPointsRanking() {
+    if (!db || !elements.pointsRankingList) return;
+    try {
+        const snap = await db.collection(FIRESTORE_POINTS.summary).orderBy('lifetimeEarned', 'desc').limit(50).get();
+        const list = [];
+        snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+
+        if (!list.length) {
+            elements.pointsRankingList.innerHTML = `<div class="points-empty">랭킹 데이터가 없습니다.</div>`;
+            return;
+        }
+
+        elements.pointsRankingList.innerHTML = list.map((u, idx) => {
+            const name = u.userNickname || u.id;
+            const lifetime = Number(u.lifetimeEarned) || 0;
+            const balance = Number(u.balance) || 0;
+            const me = currentUser?.name && name === currentUser.name;
+            return `
+                <div class="points-row" style="${me ? 'background: rgba(139,92,246,0.10);' : ''}">
+                    <div class="left">
+                        <div class="title">#${idx + 1} ${escapeHtml(name)}</div>
+                        <div class="meta">누적 획득: ${fmtInt(lifetime)}pt\n현재 보유: ${fmtInt(balance)}pt</div>
+                    </div>
+                    <div class="delta plus">${fmtInt(lifetime)}pt</div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error(e);
+        elements.pointsRankingList.innerHTML = `<div class="points-empty">랭킹 로드 실패: 인덱스/권한 설정을 확인해주세요.</div>`;
+    }
+}
+
+async function loadPointsPublicAdminLog() {
+    if (!db || !elements.pointsPublicAdminLogList) return;
+    try {
+        const snap = await db.collection(FIRESTORE_POINTS.publicAdminLog).orderBy('createdAt', 'desc').limit(100).get();
+        const list = [];
+        snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+
+        if (!list.length) {
+            elements.pointsPublicAdminLogList.innerHTML = `<div class="points-empty">표시할 로그가 없습니다.</div>`;
+            return;
+        }
+
+        elements.pointsPublicAdminLogList.innerHTML = list.map(it => {
+            const delta = Number(it.delta) || 0;
+            const plus = delta >= 0;
+            const admin = it.adminNickname || it.adminId || '(unknown)';
+            const target = it.targetNickname || it.targetUserId || '(unknown)';
+            const kst = formatKst(it.createdAt) || '';
+            const reason = it.reasonText || '';
+            return `
+                <div class="points-row">
+                    <div class="left">
+                        <div class="title">${escapeHtml(admin)} → ${escapeHtml(target)}</div>
+                        <div class="meta">${escapeHtml(kst)}\n사유: ${escapeHtml(reason)}</div>
+                    </div>
+                    <div class="delta ${plus ? 'plus' : 'minus'}">${plus ? '+' : ''}${fmtInt(delta)}pt</div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error(e);
+        elements.pointsPublicAdminLogList.innerHTML = `<div class="points-empty">로그 로드 실패: 인덱스/권한 설정을 확인해주세요.</div>`;
+    }
+}
+
+async function adminAdjustPoints() {
+    if (!db) return alert('DB 연결이 필요합니다.');
+    if (!currentUser?.isAdmin) return alert('관리자만 가능합니다.');
+
+    const targetNick = elements.adminAdjustTarget?.value?.trim() || '';
+    const delta = parseInt(elements.adminAdjustDelta?.value || '0', 10);
+    const reason = elements.adminAdjustReason?.value?.trim() || '';
+
+    if (!targetNick) return alert('대상 유저 닉네임을 입력하세요.');
+    if (!Number.isFinite(delta) || delta === 0) return alert('포인트 변경값을 입력하세요. (0 제외)');
+    if (!reason) return alert('사유를 입력하세요. (필수)');
+
+    const targetUserId = userIdFromNickname(targetNick);
+    if (!targetUserId) return;
+
+    const logId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const nowIso = new Date().toISOString();
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+
+    const targetSummaryRef = db.collection(FIRESTORE_POINTS.summary).doc(targetUserId);
+    const targetLedgerCol = db.collection(FIRESTORE_POINTS.ledgerUsers).doc(targetUserId).collection('items');
+    const targetLedgerRef = targetLedgerCol.doc(`ADMIN_ADJUST__${logId}`);
+    const publicRef = db.collection(FIRESTORE_POINTS.publicAdminLog).doc(logId);
+
+    try {
+        await db.runTransaction(async (tx) => {
+            const [sSnap, lSnap, pSnap] = await Promise.all([tx.get(targetSummaryRef), tx.get(targetLedgerRef), tx.get(publicRef)]);
+            if (lSnap.exists || pSnap.exists) return;
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const balance = Number(sum?.balance) || 0;
+            const lifetime = Number(sum?.lifetimeEarned) || 0;
+            const earnedDelta = delta > 0 ? delta : 0;
+
+            tx.set(targetLedgerRef, {
+                userId: targetUserId,
+                userNickname: targetNick,
+                type: 'ADMIN_ADJUST',
+                delta,
+                refType: 'admin_adjust',
+                refId: logId,
+                reasonText: reason,
+                adminNickname: currentUser.name,
+                adminUserId: userIdFromNickname(currentUser.name),
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            tx.set(publicRef, {
+                type: 'ADMIN_ADJUST',
+                delta,
+                reasonText: reason,
+                adminNickname: currentUser.name,
+                adminId: userIdFromNickname(currentUser.name),
+                targetNickname: targetNick,
+                targetUserId,
+                createdAt: nowIso,
+                kstDate
+            });
+
+            tx.set(targetSummaryRef, {
+                userId: targetUserId,
+                userNickname: targetNick,
+                balance: balance + delta,
+                lifetimeEarned: lifetime + earnedDelta,
+                updatedAt: nowIso
+            }, { merge: true });
+        });
+
+        showToast(`<i class="fa-solid fa-gavel"></i> 관리자 조정 완료 (${delta >= 0 ? '+' : ''}${fmtInt(delta)}pt)`);
+        elements.adminAdjustReason.value = '';
+        elements.adminAdjustDelta.value = '';
+
+        await Promise.all([loadPointsPublicAdminLog(), refreshPointsHeader(), refreshPointsMePanel(), loadMyPointLedger()]);
+    } catch (e) {
+        console.error(e);
+        alert('관리자 조정 중 오류가 발생했습니다.');
+    }
+}
+
 const firebaseConfig = {
     apiKey: "AIzaSyCDqmgOsbXZu9FNkGCULDuEnu9ehSR2gbY",
     authDomain: "aion2rudra.firebaseapp.com",
@@ -41,7 +864,7 @@ try {
     console.error("Firebase 초기화 실패.", e);
 }
 
-let currentTab = 'party';
+let currentTab = 'all';
 let posts = [];
 let currentUser = null;
 let currentEditingPostId = null;
@@ -421,7 +1244,41 @@ const elements = {
     importJsonText: document.getElementById('importJsonText'),
     importMode: document.getElementById('importMode'),
     importBtn: document.getElementById('importBtn'),
-    clearImportBtn: document.getElementById('clearImportBtn')
+    clearImportBtn: document.getElementById('clearImportBtn'),
+
+    // 포인트/뽑기
+    pointsOpenBtn: document.getElementById('pointsOpenBtn'),
+    pointsBalanceText: document.getElementById('pointsBalanceText'),
+    pointsModal: document.getElementById('pointsModal'),
+    pointsCloseBtn: document.querySelector('.points-close'),
+    pointsTabBtns: document.querySelectorAll('.points-tab-btn'),
+    pointsAdminTabBtn: document.getElementById('pointsAdminTabBtn'),
+    pointsTabMe: document.getElementById('pointsTabMe'),
+    pointsTabGacha: document.getElementById('pointsTabGacha'),
+    pointsTabRanking: document.getElementById('pointsTabRanking'),
+    pointsTabPublicLog: document.getElementById('pointsTabPublicLog'),
+    pointsTabAdmin: document.getElementById('pointsTabAdmin'),
+    pointsMeBalance: document.getElementById('pointsMeBalance'),
+    pointsMeLifetime: document.getElementById('pointsMeLifetime'),
+    pointsLedgerList: document.getElementById('pointsLedgerList'),
+    attendanceBtn: document.getElementById('attendanceBtn'),
+    pointsRefreshBtn: document.getElementById('pointsRefreshBtn'),
+    streakToday: document.getElementById('streakToday'),
+    streakDays: document.getElementById('streakDays'),
+    streakNext: document.getElementById('streakNext'),
+    streakBar: document.getElementById('streakBar'),
+    streakHint: document.getElementById('streakHint'),
+    gachaTotalDraws: document.getElementById('gachaTotalDraws'),
+    gachaAppliedRate: document.getElementById('gachaAppliedRate'),
+    gachaDrawBtn: document.getElementById('gachaDrawBtn'),
+    gachaRefreshBtn: document.getElementById('gachaRefreshBtn'),
+    gachaResult: document.getElementById('gachaResult'),
+    pointsRankingList: document.getElementById('pointsRankingList'),
+    pointsPublicAdminLogList: document.getElementById('pointsPublicAdminLogList'),
+    adminAdjustTarget: document.getElementById('adminAdjustTarget'),
+    adminAdjustDelta: document.getElementById('adminAdjustDelta'),
+    adminAdjustReason: document.getElementById('adminAdjustReason'),
+    adminAdjustSubmitBtn: document.getElementById('adminAdjustSubmitBtn')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -526,6 +1383,29 @@ function setupEventListeners() {
     if (elements.adminToolsCloseBtn) {
         elements.adminToolsCloseBtn.addEventListener('click', closeAdminToolsModal);
     }
+
+    // 포인트/뽑기 모달
+    if (elements.pointsOpenBtn) {
+        elements.pointsOpenBtn.addEventListener('click', openPointsModal);
+    }
+    if (elements.pointsCloseBtn) {
+        elements.pointsCloseBtn.addEventListener('click', closePointsModal);
+    }
+    if (elements.pointsTabBtns) {
+        elements.pointsTabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.pointsTab;
+                if (!tab) return;
+                switchPointsTab(tab);
+            });
+        });
+    }
+    if (elements.pointsRefreshBtn) elements.pointsRefreshBtn.addEventListener('click', () => refreshPointsAll({ showToastOnDone: true }));
+    if (elements.attendanceBtn) elements.attendanceBtn.addEventListener('click', doAttendanceCheck);
+    if (elements.gachaDrawBtn) elements.gachaDrawBtn.addEventListener('click', doGachaDraw);
+    if (elements.gachaRefreshBtn) elements.gachaRefreshBtn.addEventListener('click', () => refreshGachaPanel({ showToastOnDone: true }));
+    if (elements.adminAdjustSubmitBtn) elements.adminAdjustSubmitBtn.addEventListener('click', adminAdjustPoints);
+
     if (elements.adminTabBtns) {
         elements.adminTabBtns.forEach(btn => {
             btn.addEventListener('click', () => {
@@ -1583,12 +2463,21 @@ function updateUserUI() {
             elements.adminToolsBtn.classList.toggle('hidden', !currentUser.isAdmin);
         }
 
+        if (elements.pointsAdminTabBtn) {
+            elements.pointsAdminTabBtn.classList.toggle('hidden', !currentUser.isAdmin);
+        }
+
         // 관리자인 경우 공지 작성 버튼 표시
         if (currentUser.isAdmin) {
             elements.writeNoticeBtn.classList.remove('hidden');
         } else {
             elements.writeNoticeBtn.classList.add('hidden');
         }
+
+        // 포인트 UI 갱신(헤더)
+        ensurePointDocsForCurrentUser().then(() => {
+            refreshPointsHeader().catch(() => {});
+        });
     } else {
         elements.loginBtn.classList.remove('hidden');
         elements.userInfo.classList.add('hidden');
@@ -1596,6 +2485,8 @@ function updateUserUI() {
         if (elements.adminVerifyBtn) elements.adminVerifyBtn.classList.add('hidden');
         if (elements.adminBadge) elements.adminBadge.classList.add('hidden');
         if (elements.adminToolsBtn) elements.adminToolsBtn.classList.add('hidden');
+        if (elements.pointsAdminTabBtn) elements.pointsAdminTabBtn.classList.add('hidden');
+        if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '0pt';
     }
 }
 
@@ -1715,10 +2606,18 @@ function handlePostSubmit(e) {
             }
             
             db.collection("posts").add(postData)
-                .then(() => {
+                .then(async (docRef) => {
                     elements.writeModal.classList.add('hidden');
                     elements.postForm.reset();
                     showToast(`<i class="fa-solid fa-check"></i> 등록되었습니다.`);
+
+                    // 포인트 지급: 파티원 구해요/파티 구해요 글 작성 시 +10 (일/주 제한 KST 기준)
+                    try {
+                        await ensurePointDocsForCurrentUser();
+                        await awardPostCreatePoints(postData.type, docRef?.id);
+                    } catch (e) {
+                        console.error(e);
+                    }
                 })
                 .catch((error) => {
                     console.error("Error adding document: ", error);

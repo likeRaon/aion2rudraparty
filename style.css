@@ -439,6 +439,173 @@ input:focus, textarea:focus, select:focus {
 }
 
 /* =========================================
+   Points / Gacha Modal
+   ========================================= */
+.points-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+.points-tab-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-sub);
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 800;
+    font-size: 0.95rem;
+}
+.points-tab-btn.active {
+    color: var(--primary-light);
+    border-color: rgba(139, 92, 246, 0.4);
+    box-shadow: 0 0 0 3px var(--primary-dim);
+}
+.points-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+.points-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 14px;
+}
+.points-card-title {
+    font-weight: 900;
+    color: var(--text-main);
+    margin-bottom: 10px;
+}
+.points-kv {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+}
+.points-kv .k {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-right: 8px;
+}
+.points-kv .v {
+    color: var(--text-main);
+    font-weight: 900;
+}
+.points-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.points-list {
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background: rgba(0,0,0,0.12);
+}
+.points-row {
+    padding: 12px 14px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+}
+.points-row:first-child { border-top: none; }
+.points-row .left {
+    min-width: 0;
+}
+.points-row .title {
+    font-weight: 900;
+    color: var(--text-main);
+    font-size: 0.95rem;
+}
+.points-row .meta {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+}
+.points-row .delta {
+    font-weight: 900;
+    white-space: nowrap;
+}
+.points-row .delta.plus { color: var(--success); }
+.points-row .delta.minus { color: var(--danger); }
+.points-empty {
+    padding: 14px;
+    color: var(--text-sub);
+}
+.points-hint {
+    margin-top: 10px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+.points-result-box {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03);
+    color: var(--text-sub);
+    white-space: pre-wrap;
+    line-height: 1.6;
+}
+
+.streak-box {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    background: rgba(139, 92, 246, 0.08);
+}
+.streak-top {
+    display:flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: baseline;
+}
+.streak-title { font-weight: 900; color: var(--primary-light); }
+.streak-today { color: var(--text-sub); font-size: 0.85rem; }
+.streak-main {
+    margin-top: 8px;
+    display:flex;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    color: var(--text-sub);
+}
+.streak-progress {
+    margin-top: 10px;
+}
+.streak-progress .bar {
+    height: 10px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.streak-progress .bar-fill {
+    height: 100%;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+    width: 0%;
+}
+.streak-progress .hint {
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+    .points-grid { grid-template-columns: 1fr; }
+}
+
+/* =========================================
    Post Grid & Cards
    ========================================= */
 .post-grid {
