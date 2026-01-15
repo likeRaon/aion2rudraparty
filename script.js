@@ -1294,7 +1294,7 @@ const elements = {
     authHelpText: document.getElementById('authHelpText'),
     authTabLogin: document.getElementById('authTabLogin'),
     authTabSignup: document.getElementById('authTabSignup'),
-    authEmail: document.getElementById('authEmail'),
+    authLoginId: document.getElementById('authLoginId'),
     authPassword: document.getElementById('authPassword'),
     loginBtn: document.getElementById('loginBtn'),
     userInfo: document.getElementById('userInfo'),
@@ -2543,7 +2543,7 @@ function setAuthMode(mode) {
     if (elements.authHelpText) {
         elements.authHelpText.innerHTML = isSignup
             ? '회원가입 후 닉네임은 <b>변경할 수 없습니다</b>.<br>포인트 기능은 <b>관리자 승인</b> 후 사용할 수 있습니다.'
-            : '이메일/비밀번호로 로그인합니다.';
+            : '아이디/비밀번호로 로그인합니다.';
     }
     // 비밀번호 자동완성 힌트
     if (elements.authPassword) {
@@ -2602,15 +2602,29 @@ async function initAuth() {
     });
 }
 
+function isValidLoginId(id) {
+    // Firebase email로 변환할 것이므로 안전한 문자만 허용(원하면 규칙 완화 가능)
+    return /^[a-zA-Z0-9._-]{3,20}$/.test(String(id || ''));
+}
+
+function loginIdToEmail(loginId) {
+    // 이메일 입력 없이 "아이디"만 받기 위한 내부 변환
+    // 프로젝트 내 고정 도메인(실제 메일 전송 안 함)
+    const id = String(loginId || '').trim().toLowerCase();
+    return `${id}@aion2rudra.local`;
+}
+
 async function submitAuthForm() {
     if (!auth || !db) return alert('Auth/DB 초기화가 필요합니다.');
 
-    const email = String(elements.authEmail?.value || '').trim();
+    const loginId = String(elements.authLoginId?.value || '').trim();
     const pw = String(elements.authPassword?.value || '');
     const nick = String(elements.authNickname?.value || '').trim();
 
-    if (!email) return alert('이메일을 입력하세요.');
+    if (!loginId) return alert('아이디를 입력하세요.');
+    if (!isValidLoginId(loginId)) return alert('아이디 형식이 올바르지 않습니다.\n\n- 3~20자\n- 영문/숫자/._- 만 허용');
     if (!pw || pw.length < 6) return alert('비밀번호를 6자 이상 입력하세요.');
+    const email = loginIdToEmail(loginId);
 
     if (authMode === 'login') {
         try {
@@ -2656,6 +2670,8 @@ async function submitAuthForm() {
                 uid,
                 nickname: nick,
                 nicknameLower: nk,
+                loginId: String(loginId),
+                loginIdLower: String(loginId).trim().toLowerCase(),
                 pointsApproved: false,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                 approvedAt: null,
