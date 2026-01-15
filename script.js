@@ -2644,6 +2644,18 @@ function openWriteModal(isNotice, editPost = null) {
 }
 
 let authMode = 'login'; // 'login' | 'signup'
+let signupUidInFlight = null;
+
+async function waitForUserProfile(uid, tries = 12, delayMs = 200) {
+    if (!db || !uid) return null;
+    const ref = db.collection(FIRESTORE_POINTS.userProfiles).doc(uid);
+    for (let i = 0; i < tries; i++) {
+        const snap = await ref.get().catch(() => null);
+        if (snap?.exists) return snap;
+        await new Promise(r => setTimeout(r, delayMs));
+    }
+    return null;
+}
 
 function setAuthMode(mode) {
     authMode = mode === 'signup' ? 'signup' : 'login';
@@ -2683,7 +2695,18 @@ async function initAuth() {
         try {
             const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(u.uid);
             const adminRef = db.collection(FIRESTORE_POINTS.admins).doc(u.uid);
-            const [pSnap, aSnap] = await Promise.all([profileRef.get(), adminRef.get()]);
+            let [pSnap, aSnap] = await Promise.all([profileRef.get(), adminRef.get()]);
+
+            if (!pSnap.exists) {
+                // 회원가입 직후: 프로필 생성 트랜잭션이 진행 중일 수 있으므로 잠깐 대기
+                if (signupUidInFlight && signupUidInFlight === u.uid) {
+                    const waited = await waitForUserProfile(u.uid, 15, 200);
+                    if (waited?.exists) {
+                        pSnap = waited;
+                        aSnap = await adminRef.get();
+                    }
+                }
+            }
 
             if (!pSnap.exists) {
                 // 프로필이 없으면 정상 상태가 아니므로 로그아웃 처리
@@ -2788,6 +2811,10 @@ async function submitAuthForm() {
         await applyAuthPersistence();
         cred = await auth.createUserWithEmailAndPassword(email, pw);
         const uid = cred.user.uid;
+        signupUidInFlight = uid;
+
+        // 토큰 준비(간헐적 permission-denied 완화)
+        try { await cred.user.getIdToken(true); } catch {}
 
         // 닉네임 중복 방지: nickname_index/{nk} 선점
         const nickRef = db.collection(FIRESTORE_POINTS.nicknameIndex).doc(nk);
@@ -2820,12 +2847,14 @@ async function submitAuthForm() {
 
         elements.authModal.classList.add('hidden');
         showToast(`<i class="fa-solid fa-user-plus"></i> 회원가입 완료! 포인트는 관리자 승인 후 사용 가능합니다.`);
+        signupUidInFlight = null;
     } catch (e) {
         console.error(e);
         // 회원가입은 성공했는데 프로필 생성이 실패하면 계정 삭제 처리(닉네임 중복 등)
         try {
             if (cred?.user) await cred.user.delete();
         } catch {}
+        signupUidInFlight = null;
         alert(
             '회원가입 실패:\n\n' +
             (e?.message || formatFirestoreError(e)) +
