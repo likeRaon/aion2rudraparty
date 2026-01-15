@@ -653,6 +653,7 @@
                 <div class="points-tabs">
                     <button class="points-tab-btn active" data-points-tab="me"><i class="fa-solid fa-user"></i> 내 포인트</button>
                     <button class="points-tab-btn" data-points-tab="gacha"><i class="fa-solid fa-dice"></i> 뽑기</button>
+                    <button class="points-tab-btn" data-points-tab="event"><i class="fa-solid fa-star"></i> 이벤트</button>
                     <button class="points-tab-btn" data-points-tab="ranking"><i class="fa-solid fa-ranking-star"></i> 랭킹</button>
                     <button class="points-tab-btn" data-points-tab="publicLog"><i class="fa-solid fa-scale-balanced"></i> 포인트 로그</button>
                     <button id="pointsAdminTabBtn" class="points-tab-btn hidden" data-points-tab="admin"><i class="fa-solid fa-screwdriver-wrench"></i> 관리자</button>
@@ -703,7 +704,7 @@
                     <div class="points-card">
                         <div class="points-card-title">뽑기</div>
                         <div class="points-kv">
-                            <div><span class="k">1회 비용</span><span class="v">300pt</span></div>
+                            <div><span class="k">1회 비용</span><span id="gachaCostText" class="v">300pt</span></div>
                             <div><span class="k">내 누적 뽑기</span><span id="gachaTotalDraws" class="v">0</span></div>
                             <div><span class="k">이벤트</span><span id="gachaEventBadge" class="v">-</span></div>
                         </div>
@@ -712,6 +713,51 @@
                             <button id="gachaRefreshBtn" class="btn-outline"><i class="fa-solid fa-rotate"></i> 새로고침</button>
                         </div>
                         <div id="gachaResult" class="points-result-box hidden"></div>
+                    </div>
+                </div>
+
+                <div id="pointsTabEvent" class="points-tab-panel hidden">
+                    <div class="points-card">
+                        <div class="points-card-title">이벤트 안내</div>
+                        <div id="eventPublicBox" class="points-result-box">-</div>
+                    </div>
+
+                    <div id="rootEventCard" class="points-card hidden" style="margin-top: 14px;">
+                        <div class="points-card-title">ROOT 전용: 이벤트 설정 (KST)</div>
+                        <div class="points-admin-form">
+                            <div class="form-group">
+                                <label>이벤트 활성화</label>
+                                <select id="gachaEventEnabled">
+                                    <option value="false">비활성</option>
+                                    <option value="true">활성</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>시작 (KST)</label>
+                                <input type="datetime-local" id="gachaEventStartKst">
+                            </div>
+                            <div class="form-group">
+                                <label>종료 (KST)</label>
+                                <input type="datetime-local" id="gachaEventEndKst">
+                            </div>
+                            <div class="form-group">
+                                <label>확률 배수</label>
+                                <input type="number" id="gachaEventMultiplier" step="0.1" min="0" placeholder="예: 2">
+                            </div>
+                            <div class="form-group">
+                                <label>뽑기 1회 비용(선택)</label>
+                                <input type="number" id="gachaEventCostOverride" step="1" min="0" placeholder="예: 150 (비워두면 300 유지)">
+                                <p style="margin-top:6px; color: var(--text-muted); font-size: 0.85rem;">
+                                    * 예: 300 → 150로 보이게 표시되고 실제 차감도 150으로 적용됩니다.
+                                </p>
+                            </div>
+                            <div class="form-group">
+                                <label>유저에게 보여줄 문구</label>
+                                <textarea id="gachaEventMessage" placeholder="예: 신년 이벤트 진행중! 뽑기 확률 UP + 비용 할인!" style="min-height: 100px;"></textarea>
+                            </div>
+                            <button id="saveGachaEventBtn" class="btn-success full-width"><i class="fa-solid fa-wand-magic-sparkles"></i> 저장</button>
+                            <div id="gachaEventStatusText" class="points-hint" style="margin-top:10px;">-</div>
+                        </div>
                     </div>
                 </div>
 
@@ -769,36 +815,6 @@
                         </div>
                     </div>
 
-                    <div id="rootEventCard" class="points-card hidden" style="margin-top: 14px;">
-                        <div class="points-card-title">ROOT 전용: 뽑기 이벤트 설정 (KST)</div>
-                        <div class="points-admin-form">
-                            <div class="form-group">
-                                <label>이벤트 활성화</label>
-                                <select id="gachaEventEnabled">
-                                    <option value="false">비활성</option>
-                                    <option value="true">활성</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>시작 (KST)</label>
-                                <input type="datetime-local" id="gachaEventStartKst">
-                            </div>
-                            <div class="form-group">
-                                <label>종료 (KST)</label>
-                                <input type="datetime-local" id="gachaEventEndKst">
-                            </div>
-                            <div class="form-group">
-                                <label>확률 배수</label>
-                                <input type="number" id="gachaEventMultiplier" step="0.1" min="0" placeholder="예: 2">
-                                <p style="margin-top:6px; color: var(--text-muted); font-size: 0.85rem;">
-                                    * 기본 0.05% × 배수 (예: 2 → 0.1%).<br>
-                                    * 이벤트 중에는 “다음 1회 한정 행운 확률”이 (0.3% / 2% / 3.5%)로 고정됩니다.
-                                </p>
-                            </div>
-                            <button id="saveGachaEventBtn" class="btn-success full-width"><i class="fa-solid fa-wand-magic-sparkles"></i> 저장</button>
-                            <div id="gachaEventStatusText" class="points-hint" style="margin-top:10px;">-</div>
-                        </div>
-                    </div>
                 </div>
 
             </div>
@@ -810,7 +826,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     
-    <script src="script.js?v=20260115-4"></script>
+    <script src="script.js?v=20260115-5"></script>
 </body>
 
 </html>

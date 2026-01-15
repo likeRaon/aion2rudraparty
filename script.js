@@ -240,15 +240,24 @@ function getGachaBaseRate(cfg) {
     return POINTS.BASE_RATE * Math.max(0, mult);
 }
 
+function getGachaCost(cfg) {
+    const base = POINTS.COST_GACHA;
+    const active = isGachaEventActive(cfg);
+    if (!active) return base;
+    const v = Number(cfg?.costOverride);
+    if (Number.isFinite(v) && v >= 0) return Math.floor(v);
+    return base;
+}
+
 function pickNextLuckTier() {
-    // (요구) 등장확률:
-    // - 98%: 다음 뽑기 한정 +0.1% (하지만 UI에는 "보상 못 받음"만 표시)
-    // - 1.5%: 다음 뽑기 한정 +1% (소폭 증가)
-    // - 0.5%: 다음 뽑기 한정 +3% (대폭 증가)
+    // 등장확률(요구사항 문구/UI 의미에 맞춰 정리)
+    // - 98%: 보상 없음(다음 뽑기 확률 변화 없음) → null
+    // - 1.5%: 다음 뽑기 한정 소폭 증가 → 'minor'
+    // - 0.5%: 다음 뽑기 한정 대폭 증가 → 'major'
     const u = Math.random() * 100;
     if (u < 0.5) return 'major';     // 0.5%
     if (u < 2.0) return 'minor';     // 1.5%
-    return 'tiny';                  // 98%
+    return null;                    // 98%
 }
 
 function computeWinRateForDraw({ cfg, baseRate, nextLuckTier }) {
@@ -256,14 +265,12 @@ function computeWinRateForDraw({ cfg, baseRate, nextLuckTier }) {
 
     // 이벤트 중에는 "다음 1회 한정 당첨 확률"을 무조건 고정(요구사항)
     if (eventActive) {
-        if (nextLuckTier === 'tiny') return 0.003;  // 0.3%
         if (nextLuckTier === 'minor') return 0.02;  // 2%
         if (nextLuckTier === 'major') return 0.035; // 3.5%
         return baseRate; // 기본은 배수 적용
     }
 
     // 이벤트 없을 때: 기본 + 증가
-    if (nextLuckTier === 'tiny') return baseRate + 0.001; // +0.1%
     if (nextLuckTier === 'minor') return baseRate + 0.01; // +1%
     if (nextLuckTier === 'major') return baseRate + 0.03; // +3%
     return baseRate;
@@ -314,6 +321,7 @@ function setPointsTabActive(tab) {
 
     if (elements.pointsTabMe) elements.pointsTabMe.classList.toggle('hidden', tab !== 'me');
     if (elements.pointsTabGacha) elements.pointsTabGacha.classList.toggle('hidden', tab !== 'gacha');
+    if (elements.pointsTabEvent) elements.pointsTabEvent.classList.toggle('hidden', tab !== 'event');
     if (elements.pointsTabRanking) elements.pointsTabRanking.classList.toggle('hidden', tab !== 'ranking');
     if (elements.pointsTabPublicLog) elements.pointsTabPublicLog.classList.toggle('hidden', tab !== 'publicLog');
     if (elements.pointsTabAdmin) elements.pointsTabAdmin.classList.toggle('hidden', tab !== 'admin');
@@ -325,7 +333,7 @@ async function switchPointsTab(tab) {
     if (tab === 'publicLog') await loadPointsPublicAdminLog();
     if (tab === 'gacha') await refreshGachaPanel();
     if (tab === 'admin') await loadPendingApprovals();
-    if (tab === 'admin') await renderGachaEventConfigForRoot();
+    if (tab === 'event') await refreshEventPanel();
 }
 
 async function openPointsModal() {
@@ -724,10 +732,18 @@ async function refreshGachaPanel(opts = {}) {
         const totalDraws = Number(st?.totalDraws) || 0;
 
         const eventActive = isGachaEventActive(cfg);
-        const badge = eventActive ? `진행중` : `-`;
+        const badge = eventActive ? (String(cfg?.publicText || '진행중')) : `-`;
+        const cost = getGachaCost(cfg);
 
         if (elements.gachaTotalDraws) elements.gachaTotalDraws.textContent = fmtInt(totalDraws);
         if (elements.gachaEventBadge) elements.gachaEventBadge.textContent = badge;
+        if (elements.gachaCostText) {
+            if (eventActive && cost !== POINTS.COST_GACHA) {
+                elements.gachaCostText.innerHTML = `<del style="opacity:.55;">${fmtInt(POINTS.COST_GACHA)}pt</del> <span style="color: var(--warning); font-weight: 900;">${fmtInt(cost)}pt</span>`;
+            } else {
+                elements.gachaCostText.textContent = `${fmtInt(POINTS.COST_GACHA)}pt`;
+            }
+        }
 
         // 이벤트 분위기
         const card = elements.pointsTabGacha?.querySelector?.('.points-card');
@@ -751,6 +767,7 @@ async function doGachaDraw() {
     const nowIso = new Date().toISOString();
     const cfg = await loadGachaEventConfig(false);
     const baseRate = getGachaBaseRate(cfg);
+    const cost = getGachaCost(cfg);
 
     const { summaryRef, stateRef, ledgerCol, drawsCol } = getPointsRefsForUser(userId);
     const drawId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -764,7 +781,7 @@ async function doGachaDraw() {
 
             const sum = sSnap.exists ? sSnap.data() : {};
             const balance = Number(sum?.balance) || 0;
-            if (balance < POINTS.COST_GACHA) return { ok: false, code: 'insufficient' };
+            if (balance < cost) return { ok: false, code: 'insufficient', need: cost };
 
             const st = stSnap.exists ? stSnap.data() : {};
             const beforeDraws = Number(st?.totalDraws) || 0;
@@ -782,7 +799,7 @@ async function doGachaDraw() {
             let loseLuckOutcome = null;
             if (!isWin) {
                 loseLuckOutcome = pickNextLuckTier();
-                nextLuckForNextDraw = loseLuckOutcome;
+                nextLuckForNextDraw = loseLuckOutcome; // null | 'minor' | 'major'
             }
 
             // 결제 원장
@@ -790,7 +807,7 @@ async function doGachaDraw() {
                 userId,
                 userNickname: currentUser.name,
                 type: 'SPEND_GACHA',
-                delta: -POINTS.COST_GACHA,
+                delta: -cost,
                 refType: 'gacha_draw',
                 refId: drawId,
                 reasonText: null,
@@ -805,7 +822,7 @@ async function doGachaDraw() {
                 userNickname: currentUser.name,
                 createdAt: nowIso,
                 kstDate,
-                costPoints: POINTS.COST_GACHA,
+                costPoints: cost,
                 baseRate: baseRate,
                 winRateApplied: winRate,
                 nextLuckUsed: nextLuckTier,
@@ -819,7 +836,7 @@ async function doGachaDraw() {
             tx.set(summaryRef, {
                 userId,
                 userNickname: currentUser.name,
-                balance: balance - POINTS.COST_GACHA,
+                balance: balance - cost,
                 updatedAt: nowIso
             }, { merge: true });
 
@@ -844,7 +861,7 @@ async function doGachaDraw() {
         });
 
         if (!result?.ok) {
-            if (result.code === 'insufficient') return showToast(`<i class="fa-solid fa-circle-info"></i> 포인트가 부족합니다. (필요 ${POINTS.COST_GACHA}pt)`);
+            if (result.code === 'insufficient') return showToast(`<i class="fa-solid fa-circle-info"></i> 포인트가 부족합니다. (필요 ${fmtInt(result.need || cost)}pt)`);
             return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기에 실패했습니다.`);
         }
 
@@ -1062,6 +1079,8 @@ async function renderGachaEventConfigForRoot() {
     const enabled = cfg.enabled === true;
     if (elements.gachaEventEnabled) elements.gachaEventEnabled.value = enabled ? 'true' : 'false';
     if (elements.gachaEventMultiplier) elements.gachaEventMultiplier.value = String(cfg.multiplier ?? '');
+    if (elements.gachaEventCostOverride) elements.gachaEventCostOverride.value = (cfg.costOverride === null || cfg.costOverride === undefined) ? '' : String(cfg.costOverride);
+    if (elements.gachaEventMessage) elements.gachaEventMessage.value = String(cfg.publicText || '');
 
     // 저장된 UTC ISO를 KST datetime-local로 변환해서 표시
     const toKstLocal = (iso) => {
@@ -1093,6 +1112,9 @@ async function saveGachaEventConfig() {
     const startKst = elements.gachaEventStartKst?.value || '';
     const endKst = elements.gachaEventEndKst?.value || '';
     const mult = parseFloat(elements.gachaEventMultiplier?.value || '1') || 1;
+    const costOverrideRaw = String(elements.gachaEventCostOverride?.value || '').trim();
+    const costOverride = costOverrideRaw ? Math.max(0, Math.floor(parseFloat(costOverrideRaw) || 0)) : null;
+    const publicText = String(elements.gachaEventMessage?.value || '').trim();
 
     const startUtcIso = parseKstDateTimeLocalToUtcIso(startKst);
     const endUtcIso = parseKstDateTimeLocalToUtcIso(endKst);
@@ -1109,6 +1131,8 @@ async function saveGachaEventConfig() {
             startAtUtc: startUtcIso,
             endAtUtc: endUtcIso,
             multiplier: mult,
+            costOverride: costOverride,
+            publicText: publicText,
             updatedAt: new Date().toISOString(),
             updatedBy: currentUser.uid
         }, { merge: true });
@@ -1120,6 +1144,32 @@ async function saveGachaEventConfig() {
         console.error(e);
         alert('저장 실패:\n\n' + formatFirestoreError(e));
     }
+}
+
+async function refreshEventPanel() {
+    const cfg = await loadGachaEventConfig(false);
+    const active = isGachaEventActive(cfg);
+    const text = String(cfg?.publicText || '').trim();
+
+    if (elements.eventPublicBox) {
+        if (active) {
+            const start = cfg?.startAtUtc ? (formatKst(cfg.startAtUtc) || '') : '';
+            const end = cfg?.endAtUtc ? (formatKst(cfg.endAtUtc) || '') : '';
+            const cost = getGachaCost(cfg);
+            const costLine = (cost !== POINTS.COST_GACHA) ? `- 비용: ${POINTS.COST_GACHA} → ${cost}` : `- 비용: ${POINTS.COST_GACHA}`;
+            elements.eventPublicBox.textContent =
+                (text ? `${text}\n\n` : '') +
+                `상태: 진행중\n` +
+                `기간(KST): ${start} ~ ${end}\n` +
+                `- 확률 배수: ${cfg?.multiplier ?? ''}\n` +
+                `${costLine}`;
+        } else {
+            elements.eventPublicBox.textContent = text ? text : '현재 진행중인 이벤트가 없습니다.';
+        }
+    }
+
+    // ROOT 설정 UI 동기화
+    await renderGachaEventConfigForRoot();
 }
 
 window.approvePointsForUser = async function(uid) {
@@ -1701,6 +1751,7 @@ const elements = {
     pointsAdminTabBtn: document.getElementById('pointsAdminTabBtn'),
     pointsTabMe: document.getElementById('pointsTabMe'),
     pointsTabGacha: document.getElementById('pointsTabGacha'),
+    pointsTabEvent: document.getElementById('pointsTabEvent'),
     pointsTabRanking: document.getElementById('pointsTabRanking'),
     pointsTabPublicLog: document.getElementById('pointsTabPublicLog'),
     pointsTabAdmin: document.getElementById('pointsTabAdmin'),
@@ -1716,6 +1767,7 @@ const elements = {
     streakHint: document.getElementById('streakHint'),
     gachaTotalDraws: document.getElementById('gachaTotalDraws'),
     gachaEventBadge: document.getElementById('gachaEventBadge'),
+    gachaCostText: document.getElementById('gachaCostText'),
     gachaDrawBtn: document.getElementById('gachaDrawBtn'),
     gachaRefreshBtn: document.getElementById('gachaRefreshBtn'),
     gachaResult: document.getElementById('gachaResult'),
@@ -1732,8 +1784,11 @@ const elements = {
     gachaEventStartKst: document.getElementById('gachaEventStartKst'),
     gachaEventEndKst: document.getElementById('gachaEventEndKst'),
     gachaEventMultiplier: document.getElementById('gachaEventMultiplier'),
+    gachaEventCostOverride: document.getElementById('gachaEventCostOverride'),
+    gachaEventMessage: document.getElementById('gachaEventMessage'),
     saveGachaEventBtn: document.getElementById('saveGachaEventBtn'),
-    gachaEventStatusText: document.getElementById('gachaEventStatusText')
+    gachaEventStatusText: document.getElementById('gachaEventStatusText'),
+    eventPublicBox: document.getElementById('eventPublicBox')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
