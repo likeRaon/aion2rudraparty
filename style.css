@@ -581,6 +581,30 @@ input:focus, textarea:focus, select:focus {
     }
 }
 
+/* Gacha event mood */
+.gacha-event-glow {
+    position: relative;
+    border-color: rgba(251, 191, 36, 0.35) !important;
+    box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.10), 0 0 24px rgba(251, 191, 36, 0.14);
+}
+.gacha-event-glow::before {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    background: radial-gradient(circle at 20% 20%, rgba(251,191,36,0.22), transparent 40%),
+                radial-gradient(circle at 80% 30%, rgba(167,139,250,0.18), transparent 40%),
+                radial-gradient(circle at 50% 80%, rgba(34,197,94,0.14), transparent 45%);
+    opacity: 0.65;
+    filter: blur(10px);
+    pointer-events: none;
+    animation: gacha-glow-pulse 1.2s ease-in-out infinite;
+}
+@keyframes gacha-glow-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.85; }
+}
+
 .streak-box {
     margin-top: 12px;
     padding: 12px 14px;

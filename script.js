@@ -10,22 +10,18 @@ const LOG_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4
 const DISCORD_POST_WEBHOOK_URL = atob(POST_WEBHOOK_SECRET);
 const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
 
-// 뽑기 당첨 알림 (Discord 특정 채널 웹훅 필요)
-// 보안상 웹훅 URL(토큰 포함)은 코드에 하드코딩하지 마세요.
-// 관리자 브라우저의 localStorage에만 저장해서 사용합니다. (raw URL 또는 base64 둘 다 지원)
-//
-// 설정 방법(개발자도구 콘솔):
-// 1) raw URL 저장:
-//    localStorage.setItem('rudra_gacha_win_webhook_url', 'https://discord.com/api/webhooks/...')
-// 2) base64 저장:
-//    localStorage.setItem('rudra_gacha_win_webhook_url', btoa('https://discord.com/api/webhooks/...'))
-//
-// 삭제:
-//    localStorage.removeItem('rudra_gacha_win_webhook_url')
+// 뽑기 당첨 알림 (Discord 특정 채널 웹훅)
+// ⚠️ 코드에 웹훅 URL을 넣으면 누구나 스팸 전송이 가능해집니다.
+// 사용자가 요청한 “하드코딩 방식”으로 동작하도록 아래 상수에 웹훅 URL을 넣어두면
+// 모든 사용자 당첨 시 자동으로 디스코드에 전송됩니다.
+const DISCORD_GACHA_WIN_WEBHOOK_URL = 'https://discord.com/api/webhooks/1461253087606866022/u1PYYFXAEEaNl9z16ENXMerFVSd2w_GjWSZtVgYCNTngu0vcZLYrk_kskSWYkX-857wN';
+
+// (옵션) 하드코딩이 부담되면 localStorage에 넣는 방식도 지원
 const GACHA_WIN_WEBHOOK_STORAGE_KEY = 'rudra_gacha_win_webhook_url';
 
 function getGachaWinWebhookUrl() {
     try {
+        if (DISCORD_GACHA_WIN_WEBHOOK_URL) return DISCORD_GACHA_WIN_WEBHOOK_URL;
         const v = String(localStorage.getItem(GACHA_WIN_WEBHOOK_STORAGE_KEY) || '').trim();
         if (!v) return '';
         if (v.startsWith('https://') || v.startsWith('http://')) return v;
@@ -56,7 +52,7 @@ const CONSTANTS = {
 // =========================
 const POINTS = {
     COST_GACHA: 300,
-    BASE_RATE: 0.001, // 0.1%
+    BASE_RATE: 0.0005, // 0.05%
     EARN: {
         ATTENDANCE: 10,
         POST: 10,
@@ -80,7 +76,9 @@ const FIRESTORE_POINTS = {
     gachaDrawsUsers: 'gacha_draws_users',
     userProfiles: 'user_profiles',
     nicknameIndex: 'nickname_index',
-    admins: 'admins'
+    admins: 'admins',
+    roots: 'roots',
+    gachaEvent: 'gacha_event'
 };
 
 function normalizeNickname(nick) {
@@ -155,6 +153,7 @@ async function ensurePointDocsForCurrentUser() {
                     totalDraws: 0,
                     totalWins: 0,
                     gachaPity: 0,
+                    gachaNextLuck: null,
                     updatedAt: nowIso
                 });
             } else {
@@ -188,6 +187,86 @@ function fmtInt(n) {
 function fmtRate(rate) {
     const r = Number(rate) || 0;
     return `${(r * 100).toFixed(1)}%`;
+}
+
+// =========================
+// Gacha event config (KST)
+// =========================
+let gachaEventCache = { loadedAt: 0, data: null };
+
+function parseKstDateTimeLocalToUtcIso(dtLocal) {
+    // dtLocal: "YYYY-MM-DDTHH:mm" (사용자 입력을 KST로 해석)
+    const s = String(dtLocal || '').trim();
+    if (!s) return null;
+    // KST를 UTC로 변환: KST = UTC+9 → UTC = KST-9
+    const [datePart, timePart] = s.split('T');
+    if (!datePart || !timePart) return null;
+    const [y, m, d] = datePart.split('-').map(n => parseInt(n, 10));
+    const [hh, mm] = timePart.split(':').map(n => parseInt(n, 10));
+    if (!y || !m || !d || !Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    const utcMs = Date.UTC(y, m - 1, d, hh - 9, mm, 0, 0);
+    return new Date(utcMs).toISOString();
+}
+
+async function loadGachaEventConfig(force = false) {
+    if (!db) return null;
+    const now = Date.now();
+    if (!force && gachaEventCache.data && (now - gachaEventCache.loadedAt) < 30_000) return gachaEventCache.data;
+    try {
+        const snap = await db.collection(FIRESTORE_POINTS.gachaEvent).doc('current').get();
+        const data = snap.exists ? snap.data() : null;
+        gachaEventCache = { loadedAt: now, data };
+        return data;
+    } catch (e) {
+        console.error('gacha event config load failed:', e);
+        return null;
+    }
+}
+
+function isGachaEventActive(cfg, nowUtc = new Date()) {
+    if (!cfg || cfg.enabled !== true) return false;
+    const start = cfg.startAtUtc ? new Date(cfg.startAtUtc) : null;
+    const end = cfg.endAtUtc ? new Date(cfg.endAtUtc) : null;
+    if (!start || Number.isNaN(start.getTime())) return false;
+    if (!end || Number.isNaN(end.getTime())) return false;
+    const t = nowUtc.getTime();
+    return t >= start.getTime() && t <= end.getTime();
+}
+
+function getGachaBaseRate(cfg) {
+    const active = isGachaEventActive(cfg);
+    if (!active) return POINTS.BASE_RATE;
+    const mult = Number(cfg.multiplier) || 1;
+    return POINTS.BASE_RATE * Math.max(0, mult);
+}
+
+function pickNextLuckTier() {
+    // (요구) 등장확률:
+    // - 98%: 다음 뽑기 한정 +0.1% (하지만 UI에는 "보상 못 받음"만 표시)
+    // - 1.5%: 다음 뽑기 한정 +1% (소폭 증가)
+    // - 0.5%: 다음 뽑기 한정 +3% (대폭 증가)
+    const u = Math.random() * 100;
+    if (u < 0.5) return 'major';     // 0.5%
+    if (u < 2.0) return 'minor';     // 1.5%
+    return 'tiny';                  // 98%
+}
+
+function computeWinRateForDraw({ cfg, baseRate, nextLuckTier }) {
+    const eventActive = isGachaEventActive(cfg);
+
+    // 이벤트 중에는 "다음 1회 한정 당첨 확률"을 무조건 고정(요구사항)
+    if (eventActive) {
+        if (nextLuckTier === 'tiny') return 0.003;  // 0.3%
+        if (nextLuckTier === 'minor') return 0.02;  // 2%
+        if (nextLuckTier === 'major') return 0.035; // 3.5%
+        return baseRate; // 기본은 배수 적용
+    }
+
+    // 이벤트 없을 때: 기본 + 증가
+    if (nextLuckTier === 'tiny') return baseRate + 0.001; // +0.1%
+    if (nextLuckTier === 'minor') return baseRate + 0.01; // +1%
+    if (nextLuckTier === 'major') return baseRate + 0.03; // +3%
+    return baseRate;
 }
 
 function formatFirestoreError(e) {
@@ -246,6 +325,7 @@ async function switchPointsTab(tab) {
     if (tab === 'publicLog') await loadPointsPublicAdminLog();
     if (tab === 'gacha') await refreshGachaPanel();
     if (tab === 'admin') await loadPendingApprovals();
+    if (tab === 'admin') await renderGachaEventConfigForRoot();
 }
 
 async function openPointsModal() {
@@ -638,14 +718,21 @@ async function refreshGachaPanel(opts = {}) {
 
     const stateRef = db.collection(FIRESTORE_POINTS.state).doc(userId);
     try {
+        const cfg = await loadGachaEventConfig(false);
         const snap = await stateRef.get();
         const st = snap.exists ? snap.data() : {};
         const totalDraws = Number(st?.totalDraws) || 0;
-        const pity = Number(st?.gachaPity) || 0; // 당첨 전까지 누적(당첨 시 0으로 초기화)
-        const rate = Math.min(POINTS.BASE_RATE * (1 + pity), 1);
+
+        const eventActive = isGachaEventActive(cfg);
+        const badge = eventActive ? `진행중` : `-`;
 
         if (elements.gachaTotalDraws) elements.gachaTotalDraws.textContent = fmtInt(totalDraws);
-        if (elements.gachaAppliedRate) elements.gachaAppliedRate.textContent = fmtRate(rate);
+        if (elements.gachaEventBadge) elements.gachaEventBadge.textContent = badge;
+
+        // 이벤트 분위기
+        const card = elements.pointsTabGacha?.querySelector?.('.points-card');
+        if (card) card.classList.toggle('gacha-event-glow', eventActive);
+
         if (opts.showToastOnDone) showToast(`<i class="fa-solid fa-rotate"></i> 뽑기 정보를 갱신했습니다.`);
     } catch (e) {
         console.error(e);
@@ -662,6 +749,8 @@ async function doGachaDraw() {
     const kstDate = getKstDateKeyFromNow();
     const weekKey = getIsoWeekKeyFromKstNow();
     const nowIso = new Date().toISOString();
+    const cfg = await loadGachaEventConfig(false);
+    const baseRate = getGachaBaseRate(cfg);
 
     const { summaryRef, stateRef, ledgerCol, drawsCol } = getPointsRefsForUser(userId);
     const drawId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -679,14 +768,22 @@ async function doGachaDraw() {
 
             const st = stSnap.exists ? stSnap.data() : {};
             const beforeDraws = Number(st?.totalDraws) || 0;
-            const pity = Number(st?.gachaPity) || 0;
-            const appliedRate = Math.min(POINTS.BASE_RATE * (1 + pity), 1);
+            const nextLuckTier = st?.gachaNextLuck || null; // 이전 꽝에서 얻은 "다음 1회 한정" 행운
+            const winRate = computeWinRateForDraw({ cfg, baseRate, nextLuckTier });
 
             const u = new Uint32Array(1);
             crypto.getRandomValues(u);
             const roll = u[0] % 1000000; // 0..999999
-            const winThreshold = Math.floor(appliedRate * 1000000);
+            const winThreshold = Math.floor(winRate * 1000000);
             const isWin = roll < winThreshold;
+
+            // 이번 뽑기에서 nextLuckTier는 소비됨(1회 한정)
+            let nextLuckForNextDraw = null;
+            let loseLuckOutcome = null;
+            if (!isWin) {
+                loseLuckOutcome = pickNextLuckTier();
+                nextLuckForNextDraw = loseLuckOutcome;
+            }
 
             // 결제 원장
             tx.set(spendLedgerRef, {
@@ -709,11 +806,13 @@ async function doGachaDraw() {
                 createdAt: nowIso,
                 kstDate,
                 costPoints: POINTS.COST_GACHA,
-                baseRate: POINTS.BASE_RATE,
-                appliedRate,
+                baseRate: baseRate,
+                winRateApplied: winRate,
+                nextLuckUsed: nextLuckTier,
                 userTotalDrawsBefore: beforeDraws,
                 rngRoll: roll,
-                isWin
+                isWin,
+                loseLuckOutcome: loseLuckOutcome
             });
 
             // 요약 갱신 (누적 획득은 증가하지 않음)
@@ -729,11 +828,19 @@ async function doGachaDraw() {
                 userNickname: currentUser.name,
                 totalDraws: beforeDraws + 1,
                 totalWins: (Number(st?.totalWins) || 0) + (isWin ? 1 : 0),
-                gachaPity: isWin ? 0 : (pity + 1),
+                gachaPity: 0, // (요구) 누적 증가 삭제 → 더 이상 사용하지 않음
+                gachaNextLuck: nextLuckForNextDraw,
                 updatedAt: nowIso
             }, { merge: true });
 
-            return { ok: true, appliedRate, beforeDraws, pity, roll, isWin };
+            return {
+                ok: true,
+                isWin,
+                roll,
+                usedNextLuck: nextLuckTier,
+                newNextLuck: nextLuckForNextDraw,
+                eventActive: isGachaEventActive(cfg)
+            };
         });
 
         if (!result?.ok) {
@@ -741,11 +848,21 @@ async function doGachaDraw() {
             return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기에 실패했습니다.`);
         }
 
-        const msg =
-            `결과: ${result.isWin ? '당첨' : '꽝'}\n` +
-            `이번 적용 확률: ${fmtRate(result.appliedRate)} (당첨 전 누적 ${fmtInt(result.pity)}회)\n` +
-            `roll: ${result.roll} / 999999\n` +
-            (result.isWin ? `\n※ 당첨되어 확률 증가가 초기화됩니다.` : '');
+        let msg = '';
+        if (result.isWin) {
+            msg = `결과: 당첨\n\n축하합니다! 🎉`;
+        } else {
+            if (result.newNextLuck === 'minor') {
+                msg = `결과: 꽝\n뽑기 보상으로 행운이 적용되어 다음 뽑기 확률 소폭 증가 🧚`;
+            } else if (result.newNextLuck === 'major') {
+                msg = `결과: 꽝\n뽑기 보상으로 행운이 적용되어 다음 뽑기 확률 🎉 대폭 증가 🎉`;
+            } else {
+                msg = `결과: 꽝\n뽑기 보상을 획득하지 못하였습니다. 🥲`;
+            }
+            if (result.eventActive) {
+                msg += `\n\n※ 이벤트 진행중`;
+            }
+        }
 
         if (elements.gachaResult) {
             elements.gachaResult.classList.remove('hidden');
@@ -767,7 +884,6 @@ async function doGachaDraw() {
                 '🎉 **뽑기 당첨!**',
                 `- 닉네임: ${currentUser?.name || ''}`,
                 `- uid: ${currentUser?.uid || ''}`,
-                `- 적용 확률: ${fmtRate(result.appliedRate)} (당첨 전 누적 ${fmtInt(result.pity)}회)`,
                 `- 시각(KST): ${formatKst(new Date().toISOString()) || ''}`
             ].join('\n'));
         } else {
@@ -932,6 +1048,77 @@ async function loadPendingApprovals() {
     } catch (e) {
         console.error(e);
         elements.pendingApprovalsList.innerHTML = `<div class="points-empty">로드 실패: ${escapeHtml(formatFirestoreError(e))}</div>`;
+    }
+}
+
+async function renderGachaEventConfigForRoot() {
+    if (!elements.rootEventCard || !currentUser?.isRoot) return;
+    const cfg = await loadGachaEventConfig(true);
+    if (!cfg) {
+        if (elements.gachaEventStatusText) elements.gachaEventStatusText.textContent = '현재 저장된 이벤트 설정이 없습니다.';
+        return;
+    }
+
+    const enabled = cfg.enabled === true;
+    if (elements.gachaEventEnabled) elements.gachaEventEnabled.value = enabled ? 'true' : 'false';
+    if (elements.gachaEventMultiplier) elements.gachaEventMultiplier.value = String(cfg.multiplier ?? '');
+
+    // 저장된 UTC ISO를 KST datetime-local로 변환해서 표시
+    const toKstLocal = (iso) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '';
+        const k = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+        return k.toISOString().slice(0, 16); // YYYY-MM-DDTHH:mm
+    };
+    if (elements.gachaEventStartKst) elements.gachaEventStartKst.value = toKstLocal(cfg.startAtUtc);
+    if (elements.gachaEventEndKst) elements.gachaEventEndKst.value = toKstLocal(cfg.endAtUtc);
+
+    const active = isGachaEventActive(cfg);
+    if (elements.gachaEventStatusText) {
+        const startKst = cfg.startAtUtc ? (formatKst(cfg.startAtUtc) || '') : '';
+        const endKst = cfg.endAtUtc ? (formatKst(cfg.endAtUtc) || '') : '';
+        elements.gachaEventStatusText.textContent =
+            `상태: ${enabled ? (active ? '진행중' : '대기/종료') : '비활성'}\n` +
+            `기간(KST): ${startKst} ~ ${endKst}\n` +
+            `배수: ${cfg.multiplier ?? ''}`;
+    }
+}
+
+async function saveGachaEventConfig() {
+    if (!currentUser?.isRoot) return alert('ROOT만 가능합니다.');
+    if (!db) return alert('DB 연결이 필요합니다.');
+
+    const enabled = String(elements.gachaEventEnabled?.value || 'false') === 'true';
+    const startKst = elements.gachaEventStartKst?.value || '';
+    const endKst = elements.gachaEventEndKst?.value || '';
+    const mult = parseFloat(elements.gachaEventMultiplier?.value || '1') || 1;
+
+    const startUtcIso = parseKstDateTimeLocalToUtcIso(startKst);
+    const endUtcIso = parseKstDateTimeLocalToUtcIso(endKst);
+    if (enabled) {
+        if (!startUtcIso || !endUtcIso) return alert('시작/종료(KST)를 입력하세요.');
+        if (new Date(startUtcIso).getTime() > new Date(endUtcIso).getTime()) return alert('시작 시간이 종료 시간보다 늦습니다.');
+        if (!(mult >= 0)) return alert('배수는 0 이상이어야 합니다.');
+    }
+
+    const ref = db.collection(FIRESTORE_POINTS.gachaEvent).doc('current');
+    try {
+        await ref.set({
+            enabled,
+            startAtUtc: startUtcIso,
+            endAtUtc: endUtcIso,
+            multiplier: mult,
+            updatedAt: new Date().toISOString(),
+            updatedBy: currentUser.uid
+        }, { merge: true });
+
+        showToast(`<i class="fa-solid fa-wand-magic-sparkles"></i> 이벤트 설정 저장 완료`);
+        await loadGachaEventConfig(true);
+        await Promise.all([renderGachaEventConfigForRoot(), refreshGachaPanel()]);
+    } catch (e) {
+        console.error(e);
+        alert('저장 실패:\n\n' + formatFirestoreError(e));
     }
 }
 
@@ -1141,7 +1328,11 @@ async function sendLogToDiscord(lines) {
 
 async function sendGachaWinToDiscord(payload) {
     const url = getGachaWinWebhookUrl();
-    if (!url) return;
+    if (!url) {
+        // 웹훅 미설정이면 조용히 스킵(필요시 콘솔에만 힌트)
+        console.warn('[gacha] win webhook not configured. set localStorage:', GACHA_WIN_WEBHOOK_STORAGE_KEY);
+        return;
+    }
     try {
         const content = String(payload || '').trim();
         if (!content) return;
@@ -1416,6 +1607,7 @@ const elements = {
     logoutBtn: document.getElementById('logoutBtn'),
     adminVerifyBtn: document.getElementById('adminVerifyBtn'),
     adminBadge: document.getElementById('adminBadge'),
+    rootBadge: document.getElementById('rootBadge'),
     adminToolsBtn: document.getElementById('adminToolsBtn'),
     authNickname: document.getElementById('authNickname'),
     authNicknameGroup: document.getElementById('authNicknameGroup'),
@@ -1523,7 +1715,7 @@ const elements = {
     streakBar: document.getElementById('streakBar'),
     streakHint: document.getElementById('streakHint'),
     gachaTotalDraws: document.getElementById('gachaTotalDraws'),
-    gachaAppliedRate: document.getElementById('gachaAppliedRate'),
+    gachaEventBadge: document.getElementById('gachaEventBadge'),
     gachaDrawBtn: document.getElementById('gachaDrawBtn'),
     gachaRefreshBtn: document.getElementById('gachaRefreshBtn'),
     gachaResult: document.getElementById('gachaResult'),
@@ -1534,7 +1726,14 @@ const elements = {
     adminAdjustReason: document.getElementById('adminAdjustReason'),
     adminAdjustSubmitBtn: document.getElementById('adminAdjustSubmitBtn'),
     pendingApprovalsReloadBtn: document.getElementById('pendingApprovalsReloadBtn'),
-    pendingApprovalsList: document.getElementById('pendingApprovalsList')
+    pendingApprovalsList: document.getElementById('pendingApprovalsList'),
+    rootEventCard: document.getElementById('rootEventCard'),
+    gachaEventEnabled: document.getElementById('gachaEventEnabled'),
+    gachaEventStartKst: document.getElementById('gachaEventStartKst'),
+    gachaEventEndKst: document.getElementById('gachaEventEndKst'),
+    gachaEventMultiplier: document.getElementById('gachaEventMultiplier'),
+    saveGachaEventBtn: document.getElementById('saveGachaEventBtn'),
+    gachaEventStatusText: document.getElementById('gachaEventStatusText')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1664,6 +1863,7 @@ function setupEventListeners() {
     if (elements.gachaRefreshBtn) elements.gachaRefreshBtn.addEventListener('click', () => refreshGachaPanel({ showToastOnDone: true }));
     if (elements.adminAdjustSubmitBtn) elements.adminAdjustSubmitBtn.addEventListener('click', adminAdjustPoints);
     if (elements.pendingApprovalsReloadBtn) elements.pendingApprovalsReloadBtn.addEventListener('click', loadPendingApprovals);
+    if (elements.saveGachaEventBtn) elements.saveGachaEventBtn.addEventListener('click', saveGachaEventConfig);
 
     if (elements.adminTabBtns) {
         elements.adminTabBtns.forEach(btn => {
@@ -2695,7 +2895,8 @@ async function initAuth() {
         try {
             const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(u.uid);
             const adminRef = db.collection(FIRESTORE_POINTS.admins).doc(u.uid);
-            let [pSnap, aSnap] = await Promise.all([profileRef.get(), adminRef.get()]);
+            const rootRef = db.collection(FIRESTORE_POINTS.roots).doc(u.uid);
+            let [pSnap, aSnap, rSnap] = await Promise.all([profileRef.get(), adminRef.get(), rootRef.get()]);
 
             if (!pSnap.exists) {
                 // 회원가입 직후: 프로필 생성 트랜잭션이 진행 중일 수 있으므로 잠깐 대기
@@ -2704,6 +2905,7 @@ async function initAuth() {
                     if (waited?.exists) {
                         pSnap = waited;
                         aSnap = await adminRef.get();
+                        rSnap = await rootRef.get();
                     }
                 }
             }
@@ -2725,6 +2927,7 @@ async function initAuth() {
             const nickname = normalizeNickname(p.nickname);
             const pointsApproved = !!p.pointsApproved;
             const isAdmin = aSnap.exists;
+            const isRoot = rSnap.exists;
 
             currentUser = {
                 uid: u.uid,
@@ -2735,7 +2938,8 @@ async function initAuth() {
                 dps: 0,
                 avatar: null,
                 verified: true,
-                isAdmin,
+                isAdmin: isAdmin || isRoot,
+                isRoot,
                 pointsApproved
             };
 
@@ -2855,10 +3059,23 @@ async function submitAuthForm() {
             if (cred?.user) await cred.user.delete();
         } catch {}
         signupUidInFlight = null;
+        const code = String(e?.code || '');
+        const msg = String(e?.message || formatFirestoreError(e) || '');
+
+        if (code === 'auth/email-already-in-use') {
+            alert(
+                '회원가입 실패:\n\n' +
+                '이미 사용 중인 아이디입니다.\n\n' +
+                '- 같은 아이디로 이미 가입되어 있으면 “로그인”을 이용해 주세요.\n' +
+                '- 정말 새로 만들고 싶다면 다른 아이디로 가입해야 합니다.'
+            );
+            return;
+        }
+
         alert(
             '회원가입 실패:\n\n' +
-            (e?.message || formatFirestoreError(e)) +
-            '\n\n(대부분 Firestore Rules에서 user_profiles/nickname_index 생성이 막혀서 발생합니다. Rules 수정 후 다시 시도하세요.)'
+            msg +
+            '\n\n(참고: Firestore Rules에서 user_profiles/nickname_index 생성이 막히면 이 오류가 날 수 있습니다.)'
         );
     }
 }
@@ -2880,6 +3097,9 @@ function updateUserUI() {
         if (elements.adminBadge) {
             elements.adminBadge.classList.toggle('hidden', !currentUser.isAdmin);
         }
+        if (elements.rootBadge) {
+            elements.rootBadge.classList.toggle('hidden', !currentUser.isRoot);
+        }
 
         if (elements.adminVerifyBtn) {
             // Discord OAuth 기반 어드민 인증 버튼은 사용하지 않음
@@ -2892,6 +3112,9 @@ function updateUserUI() {
 
         if (elements.pointsAdminTabBtn) {
             elements.pointsAdminTabBtn.classList.toggle('hidden', !currentUser.isAdmin);
+        }
+        if (elements.rootEventCard) {
+            elements.rootEventCard.classList.toggle('hidden', !currentUser.isRoot);
         }
 
         // 관리자인 경우 공지 작성 버튼 표시
@@ -2915,8 +3138,10 @@ function updateUserUI() {
         elements.writeNoticeBtn.classList.add('hidden');
         if (elements.adminVerifyBtn) elements.adminVerifyBtn.classList.add('hidden');
         if (elements.adminBadge) elements.adminBadge.classList.add('hidden');
+        if (elements.rootBadge) elements.rootBadge.classList.add('hidden');
         if (elements.adminToolsBtn) elements.adminToolsBtn.classList.add('hidden');
         if (elements.pointsAdminTabBtn) elements.pointsAdminTabBtn.classList.add('hidden');
+        if (elements.rootEventCard) elements.rootEventCard.classList.add('hidden');
         if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '0pt';
     }
 }
