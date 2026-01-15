@@ -1749,6 +1749,7 @@ const elements = {
     pointsCloseBtn: document.querySelector('.points-close'),
     pointsTabBtns: document.querySelectorAll('.points-tab-btn'),
     pointsAdminTabBtn: document.getElementById('pointsAdminTabBtn'),
+    pointsEventTabBtn: document.getElementById('pointsEventTabBtn'),
     pointsTabMe: document.getElementById('pointsTabMe'),
     pointsTabGacha: document.getElementById('pointsTabGacha'),
     pointsTabEvent: document.getElementById('pointsTabEvent'),
@@ -3168,6 +3169,9 @@ function updateUserUI() {
         if (elements.pointsAdminTabBtn) {
             elements.pointsAdminTabBtn.classList.toggle('hidden', !currentUser.isAdmin);
         }
+        if (elements.pointsEventTabBtn) {
+            elements.pointsEventTabBtn.classList.toggle('hidden', !currentUser.isRoot);
+        }
         if (elements.rootEventCard) {
             elements.rootEventCard.classList.toggle('hidden', !currentUser.isRoot);
         }
@@ -3196,6 +3200,7 @@ function updateUserUI() {
         if (elements.rootBadge) elements.rootBadge.classList.add('hidden');
         if (elements.adminToolsBtn) elements.adminToolsBtn.classList.add('hidden');
         if (elements.pointsAdminTabBtn) elements.pointsAdminTabBtn.classList.add('hidden');
+        if (elements.pointsEventTabBtn) elements.pointsEventTabBtn.classList.add('hidden');
         if (elements.rootEventCard) elements.rootEventCard.classList.add('hidden');
         if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '0pt';
     }
