@@ -50,19 +50,22 @@ const FIRESTORE_POINTS = {
     counters: 'point_counters',
     ledgerUsers: 'point_ledger_users',
     publicAdminLog: 'public_point_admin_log',
-    gachaDrawsUsers: 'gacha_draws_users'
+    gachaDrawsUsers: 'gacha_draws_users',
+    userProfiles: 'user_profiles',
+    nicknameIndex: 'nickname_index',
+    admins: 'admins'
 };
 
-function base64UrlFromUtf8(str) {
-    // btoa는 유니코드 직접 처리 불가 → UTF-8로 변환 후 base64url
-    const b64 = btoa(unescape(encodeURIComponent(String(str || ''))));
-    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+function normalizeNickname(nick) {
+    return String(nick || '').trim();
 }
 
-function userIdFromNickname(nickname) {
-    const n = String(nickname || '').trim();
+function nicknameKey(nick) {
+    const n = normalizeNickname(nick).toLowerCase();
     if (!n) return null;
-    return `u_${base64UrlFromUtf8(n.toLowerCase())}`;
+    // Firestore doc id로 쓰기 위해 최소한의 정규화
+    // (한글 포함 대부분 안전. 슬래시만 제거)
+    return n.replaceAll('/', '_');
 }
 
 function getKstDateKeyFromNow() {
@@ -92,10 +95,8 @@ function getPointsRefsForUser(userId) {
 
 async function ensurePointDocsForCurrentUser() {
     if (!db) return;
-    if (!currentUser?.name) return;
-
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    if (!currentUser?.uid) return;
+    const userId = currentUser.uid;
     const { summaryRef, stateRef } = getPointsRefsForUser(userId);
 
     try {
@@ -106,19 +107,19 @@ async function ensurePointDocsForCurrentUser() {
             if (!sSnap.exists) {
                 tx.set(summaryRef, {
                     userId,
-                    userNickname: currentUser.name,
+                    userNickname: currentUser.name || '',
                     balance: 0,
                     lifetimeEarned: 0,
                     updatedAt: nowIso
                 });
             } else {
-                tx.set(summaryRef, { userNickname: currentUser.name, updatedAt: nowIso }, { merge: true });
+                tx.set(summaryRef, { userNickname: currentUser.name || '', updatedAt: nowIso }, { merge: true });
             }
 
             if (!stSnap.exists) {
                 tx.set(stateRef, {
                     userId,
-                    userNickname: currentUser.name,
+                    userNickname: currentUser.name || '',
                     lastCheckinKstDate: null,
                     currentStreakDays: 0,
                     claimed3: false,
@@ -129,7 +130,7 @@ async function ensurePointDocsForCurrentUser() {
                     updatedAt: nowIso
                 });
             } else {
-                tx.set(stateRef, { userNickname: currentUser.name, updatedAt: nowIso }, { merge: true });
+                tx.set(stateRef, { userNickname: currentUser.name || '', updatedAt: nowIso }, { merge: true });
             }
         });
     } catch (e) {
@@ -161,6 +162,14 @@ function fmtRate(rate) {
     return `${(r * 100).toFixed(1)}%`;
 }
 
+function formatFirestoreError(e) {
+    const code = e?.code ? String(e.code) : '';
+    const msg = e?.message ? String(e.message) : String(e || '');
+    // firebase compat 에러는 message에 "Missing or insufficient permissions." 같은 핵심이 들어감
+    if (code && msg) return `${code}: ${msg}`;
+    return msg || code || 'unknown error';
+}
+
 function addDaysToDateKey(dateKey, deltaDays) {
     const [y, m, d] = String(dateKey || '').split('-').map(v => parseInt(v, 10));
     if (!y || !m || !d) return null;
@@ -171,16 +180,12 @@ function addDaysToDateKey(dateKey, deltaDays) {
 
 async function refreshPointsHeader() {
     if (!elements.pointsBalanceText) return;
-    if (!db || !currentUser?.name) {
+    if (!db || !currentUser?.uid) {
         elements.pointsBalanceText.textContent = '0pt';
         return;
     }
 
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) {
-        elements.pointsBalanceText.textContent = '0pt';
-        return;
-    }
+    const userId = currentUser.uid;
 
     try {
         const snap = await db.collection(FIRESTORE_POINTS.summary).doc(userId).get();
@@ -212,11 +217,12 @@ async function switchPointsTab(tab) {
     if (tab === 'ranking') await loadPointsRanking();
     if (tab === 'publicLog') await loadPointsPublicAdminLog();
     if (tab === 'gacha') await refreshGachaPanel();
+    if (tab === 'admin') await loadPendingApprovals();
 }
 
 async function openPointsModal() {
     if (!currentUser) {
-        alert('닉네임 로그인 후 이용 가능합니다.');
+        alert('로그인 후 이용 가능합니다.');
         elements.authModal?.classList.remove('hidden');
         return;
     }
@@ -229,12 +235,39 @@ async function openPointsModal() {
     elements.pointsModal.classList.remove('hidden');
     setPointsTabActive('me');
 
+    // 승인 전: 포인트 기능 잠금
+    if (!currentUser.pointsApproved && !currentUser.isAdmin) {
+        // 탭 버튼 잠금(내 포인트 탭만 안내용으로 사용)
+        if (elements.pointsTabBtns) {
+            elements.pointsTabBtns.forEach(b => {
+                const t = b.dataset.pointsTab;
+                if (!t) return;
+                b.disabled = t !== 'me';
+            });
+        }
+        if (elements.attendanceBtn) elements.attendanceBtn.disabled = true;
+        if (elements.gachaDrawBtn) elements.gachaDrawBtn.disabled = true;
+        if (elements.pointsRefreshBtn) elements.pointsRefreshBtn.disabled = true;
+        if (elements.streakToday) elements.streakToday.textContent = '포인트 승인 필요';
+        if (elements.streakHint) elements.streakHint.textContent = '포인트 기능은 관리자 승인 후 사용할 수 있습니다.';
+        if (elements.pointsLedgerList) elements.pointsLedgerList.innerHTML = `<div class="points-empty">포인트 기능은 관리자 승인 후 사용할 수 있습니다.</div>`;
+        if (elements.gachaResult) { elements.gachaResult.classList.remove('hidden'); elements.gachaResult.textContent = '포인트 승인 후 뽑기를 이용할 수 있습니다.'; }
+        return;
+    }
+
+    if (elements.pointsTabBtns) {
+        elements.pointsTabBtns.forEach(b => { b.disabled = false; });
+    }
+    if (elements.attendanceBtn) elements.attendanceBtn.disabled = false;
+    if (elements.gachaDrawBtn) elements.gachaDrawBtn.disabled = false;
+    if (elements.pointsRefreshBtn) elements.pointsRefreshBtn.disabled = false;
+
     await ensurePointDocsForCurrentUser();
     await refreshPointsAll();
 }
 
 async function refreshPointsAll(opts = {}) {
-    if (!db || !currentUser?.name) return;
+    if (!db || !currentUser?.uid) return;
     await Promise.all([
         refreshPointsHeader(),
         refreshPointsMePanel(),
@@ -245,9 +278,8 @@ async function refreshPointsAll(opts = {}) {
 }
 
 async function refreshPointsMePanel() {
-    if (!db || !currentUser?.name) return;
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    if (!db || !currentUser?.uid) return;
+    const userId = currentUser.uid;
 
     const summaryRef = db.collection(FIRESTORE_POINTS.summary).doc(userId);
     const stateRef = db.collection(FIRESTORE_POINTS.state).doc(userId);
@@ -324,9 +356,8 @@ function renderLedgerRows(list) {
 }
 
 async function loadMyPointLedger() {
-    if (!db || !currentUser?.name || !elements.pointsLedgerList) return;
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    if (!db || !currentUser?.uid || !elements.pointsLedgerList) return;
+    const userId = currentUser.uid;
     const { ledgerCol } = getPointsRefsForUser(userId);
 
     try {
@@ -336,16 +367,16 @@ async function loadMyPointLedger() {
         renderLedgerRows(list);
     } catch (e) {
         console.error(e);
-        elements.pointsLedgerList.innerHTML = `<div class="points-empty">원장 로드 실패: 인덱스/권한 설정을 확인해주세요.</div>`;
+        elements.pointsLedgerList.innerHTML = `<div class="points-empty">원장 로드 실패: ${escapeHtml(formatFirestoreError(e))}</div>`;
     }
 }
 
 async function doAttendanceCheck() {
     if (!db) return alert('DB 연결이 필요합니다.');
-    if (!currentUser?.name) return alert('로그인 후 이용 가능합니다.');
+    if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
+    if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
 
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    const userId = currentUser.uid;
 
     const kstDate = getKstDateKeyFromNow();
     const weekKey = getIsoWeekKeyFromKstNow();
@@ -490,16 +521,16 @@ async function doAttendanceCheck() {
         await refreshPointsAll();
     } catch (e) {
         console.error(e);
-        alert('출석 처리 중 오류가 발생했습니다.');
+        alert('출석 처리 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
     }
 }
 
 async function awardPostCreatePoints(postType, postId) {
-    if (!db || !currentUser?.name) return;
+    if (!db || !currentUser?.uid) return;
+    if (!currentUser.pointsApproved && !currentUser.isAdmin) return;
     if (!postId) return;
 
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    const userId = currentUser.uid;
 
     const kstDate = getKstDateKeyFromNow();
     const weekKey = getIsoWeekKeyFromKstNow();
@@ -574,9 +605,8 @@ async function awardPostCreatePoints(postType, postId) {
 }
 
 async function refreshGachaPanel(opts = {}) {
-    if (!db || !currentUser?.name) return;
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    if (!db || !currentUser?.uid) return;
+    const userId = currentUser.uid;
 
     const stateRef = db.collection(FIRESTORE_POINTS.state).doc(userId);
     try {
@@ -595,10 +625,10 @@ async function refreshGachaPanel(opts = {}) {
 
 async function doGachaDraw() {
     if (!db) return alert('DB 연결이 필요합니다.');
-    if (!currentUser?.name) return alert('로그인 후 이용 가능합니다.');
+    if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
+    if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
 
-    const userId = userIdFromNickname(currentUser.name);
-    if (!userId) return;
+    const userId = currentUser.uid;
 
     const kstDate = getKstDateKeyFromNow();
     const weekKey = getIsoWeekKeyFromKstNow();
@@ -693,7 +723,7 @@ async function doGachaDraw() {
         await refreshPointsAll();
     } catch (e) {
         console.error(e);
-        alert('뽑기 처리 중 오류가 발생했습니다.');
+        alert('뽑기 처리 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
     }
 }
 
@@ -726,7 +756,7 @@ async function loadPointsRanking() {
         }).join('');
     } catch (e) {
         console.error(e);
-        elements.pointsRankingList.innerHTML = `<div class="points-empty">랭킹 로드 실패: 인덱스/권한 설정을 확인해주세요.</div>`;
+        elements.pointsRankingList.innerHTML = `<div class="points-empty">랭킹 로드 실패: ${escapeHtml(formatFirestoreError(e))}</div>`;
     }
 }
 
@@ -761,9 +791,102 @@ async function loadPointsPublicAdminLog() {
         }).join('');
     } catch (e) {
         console.error(e);
-        elements.pointsPublicAdminLogList.innerHTML = `<div class="points-empty">로그 로드 실패: 인덱스/권한 설정을 확인해주세요.</div>`;
+        elements.pointsPublicAdminLogList.innerHTML = `<div class="points-empty">로그 로드 실패: ${escapeHtml(formatFirestoreError(e))}</div>`;
     }
 }
+
+async function loadPendingApprovals() {
+    if (!db || !elements.pendingApprovalsList) return;
+    if (!currentUser?.isAdmin) {
+        elements.pendingApprovalsList.innerHTML = `<div class="points-empty">관리자만 볼 수 있습니다.</div>`;
+        return;
+    }
+
+    elements.pendingApprovalsList.innerHTML = `<div class="points-empty">불러오는 중...</div>`;
+    try {
+        const snap = await db.collection(FIRESTORE_POINTS.userProfiles)
+            .where('pointsApproved', '==', false)
+            .limit(100)
+            .get();
+
+        const list = [];
+        snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+
+        list.sort((a, b) => {
+            const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+            const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+            return bt - at;
+        });
+
+        if (!list.length) {
+            elements.pendingApprovalsList.innerHTML = `<div class="points-empty">승인 대기 유저가 없습니다.</div>`;
+            return;
+        }
+
+        elements.pendingApprovalsList.innerHTML = list.map(u => {
+            const nick = u.nickname || '(닉네임 없음)';
+            const createdAtIso = u.createdAt?.toDate ? u.createdAt.toDate().toISOString() : null;
+            const createdKst = createdAtIso ? (formatKst(createdAtIso) || '') : '';
+            return `
+                <div class="points-row">
+                    <div class="left">
+                        <div class="title">${escapeHtml(nick)}</div>
+                        <div class="meta">uid: ${escapeHtml(u.uid || u.id)}\n가입: ${escapeHtml(createdKst)}</div>
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <button class="btn-success" onclick="approvePointsForUser('${escapeHtml(u.uid || u.id)}')"><i class="fa-solid fa-check"></i> 승인</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error(e);
+        elements.pendingApprovalsList.innerHTML = `<div class="points-empty">로드 실패: ${escapeHtml(formatFirestoreError(e))}</div>`;
+    }
+}
+
+window.approvePointsForUser = async function(uid) {
+    if (!db) return;
+    if (!currentUser?.isAdmin) return alert('관리자만 가능합니다.');
+    if (!uid) return;
+
+    const ok = confirm(`이 유저의 포인트 기능을 승인할까요?\n\nuid: ${uid}`);
+    if (!ok) return;
+
+    const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(uid);
+    const now = firebase.firestore.FieldValue.serverTimestamp();
+
+    try {
+        await db.runTransaction(async (tx) => {
+            const pSnap = await tx.get(profileRef);
+            if (!pSnap.exists) throw new Error('프로필이 없습니다.');
+            const p = pSnap.data() || {};
+            if (p.pointsApproved === true) return;
+
+            tx.set(profileRef, { pointsApproved: true, approvedAt: now, approvedBy: currentUser.uid }, { merge: true });
+
+            // 승인과 동시에 포인트 문서도 초기화(요약/상태)
+            const { summaryRef, stateRef } = getPointsRefsForUser(uid);
+            const nowIso = new Date().toISOString();
+            const nick = String(p.nickname || '').trim();
+
+            const sSnap = await tx.get(summaryRef);
+            if (!sSnap.exists) {
+                tx.set(summaryRef, { userId: uid, userNickname: nick, balance: 0, lifetimeEarned: 0, updatedAt: nowIso });
+            }
+            const stSnap = await tx.get(stateRef);
+            if (!stSnap.exists) {
+                tx.set(stateRef, { userId: uid, userNickname: nick, lastCheckinKstDate: null, currentStreakDays: 0, claimed3: false, claimed7: false, claimed14: false, totalDraws: 0, totalWins: 0, updatedAt: nowIso });
+            }
+        });
+
+        showToast(`<i class="fa-solid fa-check"></i> 승인 완료`);
+        await Promise.all([loadPendingApprovals(), loadPointsPublicAdminLog()]);
+    } catch (e) {
+        console.error(e);
+        alert('승인 실패:\n\n' + formatFirestoreError(e));
+    }
+};
 
 async function adminAdjustPoints() {
     if (!db) return alert('DB 연결이 필요합니다.');
@@ -777,8 +900,13 @@ async function adminAdjustPoints() {
     if (!Number.isFinite(delta) || delta === 0) return alert('포인트 변경값을 입력하세요. (0 제외)');
     if (!reason) return alert('사유를 입력하세요. (필수)');
 
-    const targetUserId = userIdFromNickname(targetNick);
-    if (!targetUserId) return;
+    const nk = nicknameKey(targetNick);
+    if (!nk) return alert('닉네임 형식을 확인해 주세요.');
+
+    const nickRef = db.collection(FIRESTORE_POINTS.nicknameIndex).doc(nk);
+    const nickSnap = await nickRef.get().catch(() => null);
+    const targetUserId = nickSnap?.exists ? (nickSnap.data()?.uid || null) : null;
+    if (!targetUserId) return alert('대상 유저를 찾을 수 없습니다.');
 
     const logId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const nowIso = new Date().toISOString();
@@ -809,7 +937,7 @@ async function adminAdjustPoints() {
                 refId: logId,
                 reasonText: reason,
                 adminNickname: currentUser.name,
-                adminUserId: userIdFromNickname(currentUser.name),
+                adminUserId: currentUser.uid,
                 createdAt: nowIso,
                 kstDate,
                 kstWeekKey: weekKey
@@ -820,7 +948,7 @@ async function adminAdjustPoints() {
                 delta,
                 reasonText: reason,
                 adminNickname: currentUser.name,
-                adminId: userIdFromNickname(currentUser.name),
+                adminId: currentUser.uid,
                 targetNickname: targetNick,
                 targetUserId,
                 createdAt: nowIso,
@@ -843,7 +971,7 @@ async function adminAdjustPoints() {
         await Promise.all([loadPointsPublicAdminLog(), refreshPointsHeader(), refreshPointsMePanel(), loadMyPointLedger()]);
     } catch (e) {
         console.error(e);
-        alert('관리자 조정 중 오류가 발생했습니다.');
+        alert('관리자 조정 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
     }
 }
 
@@ -857,9 +985,11 @@ const firebaseConfig = {
 };
 
 let db;
+let auth;
 try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
+    auth = firebase.auth();
 } catch (e) {
     console.error("Firebase 초기화 실패.", e);
 }
@@ -1021,7 +1151,9 @@ function canManagePost(post) {
     if (!post) return false;
     if (!currentUser) return false;
     if (currentUser.isAdmin) return true;
-    // 일반 유저는 "내 닉네임 == 작성자 닉네임" 일 때만 관리 가능 (추가로 비밀번호 확인)
+    // 일반 유저는 "내 uid == 작성자 uid" 일 때만 관리 가능 (추가로 비밀번호 확인)
+    if (currentUser.uid && post.authorUid && currentUser.uid === post.authorUid) return true;
+    // 구버전 데이터(authorUid 없던 시절) 호환: 닉네임 비교
     return currentUser.name && post.author && currentUser.name === post.author.name;
 }
 
@@ -1158,6 +1290,12 @@ const elements = {
     authModal: document.getElementById('authModal'),
     authCloseBtn: document.querySelector('.auth-close'),
     authForm: document.getElementById('authForm'),
+    authModalTitle: document.getElementById('authModalTitle'),
+    authHelpText: document.getElementById('authHelpText'),
+    authTabLogin: document.getElementById('authTabLogin'),
+    authTabSignup: document.getElementById('authTabSignup'),
+    authEmail: document.getElementById('authEmail'),
+    authPassword: document.getElementById('authPassword'),
     loginBtn: document.getElementById('loginBtn'),
     userInfo: document.getElementById('userInfo'),
     userNickname: document.getElementById('userNickname'),
@@ -1166,6 +1304,8 @@ const elements = {
     adminBadge: document.getElementById('adminBadge'),
     adminToolsBtn: document.getElementById('adminToolsBtn'),
     authNickname: document.getElementById('authNickname'),
+    authNicknameGroup: document.getElementById('authNicknameGroup'),
+    authSubmitBtn: document.getElementById('authSubmitBtn'),
     manageModal: document.getElementById('manageModal'),
     manageCloseBtn: document.querySelector('.manage-close'),
     managePostInfo: document.getElementById('managePostInfo'),
@@ -1278,12 +1418,13 @@ const elements = {
     adminAdjustTarget: document.getElementById('adminAdjustTarget'),
     adminAdjustDelta: document.getElementById('adminAdjustDelta'),
     adminAdjustReason: document.getElementById('adminAdjustReason'),
-    adminAdjustSubmitBtn: document.getElementById('adminAdjustSubmitBtn')
+    adminAdjustSubmitBtn: document.getElementById('adminAdjustSubmitBtn'),
+    pendingApprovalsReloadBtn: document.getElementById('pendingApprovalsReloadBtn'),
+    pendingApprovalsList: document.getElementById('pendingApprovalsList')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-    loadUser();
-    handleDiscordAdminCallback();
+    initAuth();
     setupRealtimeListener();
     setupEventListeners();
 
@@ -1358,6 +1499,8 @@ function setupEventListeners() {
     }
 
     elements.loginBtn.addEventListener('click', () => {
+        // 기본은 로그인 탭
+        setAuthMode('login');
         elements.authModal.classList.remove('hidden');
     });
     
@@ -1365,17 +1508,18 @@ function setupEventListeners() {
         elements.authModal.classList.add('hidden');
     });
 
-    elements.authForm.addEventListener('submit', (e) => {
+    if (elements.authTabLogin) elements.authTabLogin.addEventListener('click', () => setAuthMode('login'));
+    if (elements.authTabSignup) elements.authTabSignup.addEventListener('click', () => setAuthMode('signup'));
+
+    elements.authForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        login(elements.authNickname.value);
-        elements.authModal.classList.add('hidden');
+        await submitAuthForm();
     });
 
     elements.logoutBtn.addEventListener('click', logout);
 
-    if (elements.adminVerifyBtn) {
-        elements.adminVerifyBtn.addEventListener('click', beginDiscordAdminVerify);
-    }
+    // adminVerifyBtn(디스코드 OAuth)은 "완벽 보안" 구조에선 사용하지 않음
+    // (관리자 여부는 Firestore `admins/{uid}` 존재 여부로 판별)
 
     if (elements.adminToolsBtn) {
         elements.adminToolsBtn.addEventListener('click', openAdminToolsModal);
@@ -1405,6 +1549,7 @@ function setupEventListeners() {
     if (elements.gachaDrawBtn) elements.gachaDrawBtn.addEventListener('click', doGachaDraw);
     if (elements.gachaRefreshBtn) elements.gachaRefreshBtn.addEventListener('click', () => refreshGachaPanel({ showToastOnDone: true }));
     if (elements.adminAdjustSubmitBtn) elements.adminAdjustSubmitBtn.addEventListener('click', adminAdjustPoints);
+    if (elements.pendingApprovalsReloadBtn) elements.pendingApprovalsReloadBtn.addEventListener('click', loadPendingApprovals);
 
     if (elements.adminTabBtns) {
         elements.adminTabBtns.forEach(btn => {
@@ -2327,7 +2472,7 @@ function recommendStatsForTargetScore() {
 // 글쓰기 모달 열기
 function openWriteModal(isNotice, editPost = null) {
     if (!currentUser) {
-        alert('닉네임을 먼저 설정해주세요 (로그인).');
+        alert('로그인 후 이용 가능합니다.');
         elements.authModal.classList.remove('hidden');
         return;
     }
@@ -2384,65 +2529,158 @@ function openWriteModal(isNotice, editPost = null) {
     }
 }
 
-function loadUser() {
-    const savedUser = localStorage.getItem('rudra_user');
-    if (savedUser) {
-        currentUser = JSON.parse(savedUser);
-        if (currentUser) {
-            if (typeof currentUser.isAdmin !== 'boolean') currentUser.isAdmin = false;
+let authMode = 'login'; // 'login' | 'signup'
 
-            // 기존 닉네임 기반 어드민/구버전 데이터 차단: Discord 인증으로만 관리자 유지
-            if (currentUser.isAdmin && currentUser.adminAuth?.provider !== 'discord') {
-                currentUser.isAdmin = false;
-                delete currentUser.adminAuth;
-                localStorage.setItem('rudra_user', JSON.stringify(currentUser));
-            }
-        }
-        updateUserUI();
+function setAuthMode(mode) {
+    authMode = mode === 'signup' ? 'signup' : 'login';
+    if (elements.authTabLogin) elements.authTabLogin.classList.toggle('active', authMode === 'login');
+    if (elements.authTabSignup) elements.authTabSignup.classList.toggle('active', authMode === 'signup');
+
+    const isSignup = authMode === 'signup';
+    if (elements.authModalTitle) elements.authModalTitle.textContent = isSignup ? '회원가입' : '로그인';
+    if (elements.authSubmitBtn) elements.authSubmitBtn.textContent = isSignup ? '회원가입' : '로그인';
+    if (elements.authNicknameGroup) elements.authNicknameGroup.classList.toggle('hidden', !isSignup);
+    if (elements.authHelpText) {
+        elements.authHelpText.innerHTML = isSignup
+            ? '회원가입 후 닉네임은 <b>변경할 수 없습니다</b>.<br>포인트 기능은 <b>관리자 승인</b> 후 사용할 수 있습니다.'
+            : '이메일/비밀번호로 로그인합니다.';
+    }
+    // 비밀번호 자동완성 힌트
+    if (elements.authPassword) {
+        elements.authPassword.setAttribute('autocomplete', isSignup ? 'new-password' : 'current-password');
     }
 }
 
-function login(nickname) {
-    fetchCharacterData(nickname).then(data => {
-        if (data) {
+async function initAuth() {
+    if (!auth || !db) return;
+    setAuthMode('login');
+
+    auth.onAuthStateChanged(async (u) => {
+        if (!u) {
+            currentUser = null;
+            updateUserUI();
+            return;
+        }
+
+        try {
+            const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(u.uid);
+            const adminRef = db.collection(FIRESTORE_POINTS.admins).doc(u.uid);
+            const [pSnap, aSnap] = await Promise.all([profileRef.get(), adminRef.get()]);
+
+            if (!pSnap.exists) {
+                // 프로필이 없으면 정상 상태가 아니므로 로그아웃 처리
+                await auth.signOut();
+                currentUser = null;
+                updateUserUI();
+                alert('회원 프로필이 없습니다. 다시 회원가입해 주세요.');
+                return;
+            }
+
+            const p = pSnap.data() || {};
+            const nickname = normalizeNickname(p.nickname);
+            const pointsApproved = !!p.pointsApproved;
+            const isAdmin = aSnap.exists;
+
             currentUser = {
-                name: data.name,
-                class: data.class,
-                level: data.level,
-                itemLevel: data.item_level,
-                dps: data.dps,
-                avatar: data.profile_img,
-                verified: true,
-                isAdmin: false
-            };
-        } else {
-            currentUser = {
-                name: nickname,
-                class: '미인증',
+                uid: u.uid,
+                name: nickname || '(닉네임 없음)',
+                class: '회원',
                 level: 0,
                 itemLevel: 0,
                 dps: 0,
                 avatar: null,
-                verified: false,
-                isAdmin: false
+                verified: true,
+                isAdmin,
+                pointsApproved
             };
-        }
-        
-        const savedUser = JSON.parse(localStorage.getItem('rudra_user') || '{}');
-        if (savedUser && savedUser.name === currentUser.name && savedUser.dps) {
-            currentUser.dps = savedUser.dps;
-        }
 
-        localStorage.setItem('rudra_user', JSON.stringify(currentUser));
-        updateUserUI();
+            updateUserUI();
+        } catch (e) {
+            console.error(e);
+            alert('로그인 상태를 불러오는 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
+        }
     });
 }
 
-function logout() {
-    currentUser = null;
-    localStorage.removeItem('rudra_user');
-    updateUserUI();
-    location.reload();
+async function submitAuthForm() {
+    if (!auth || !db) return alert('Auth/DB 초기화가 필요합니다.');
+
+    const email = String(elements.authEmail?.value || '').trim();
+    const pw = String(elements.authPassword?.value || '');
+    const nick = String(elements.authNickname?.value || '').trim();
+
+    if (!email) return alert('이메일을 입력하세요.');
+    if (!pw || pw.length < 6) return alert('비밀번호를 6자 이상 입력하세요.');
+
+    if (authMode === 'login') {
+        try {
+            await auth.signInWithEmailAndPassword(email, pw);
+            elements.authModal.classList.add('hidden');
+        } catch (e) {
+            console.error(e);
+            alert('로그인 실패:\n\n' + formatFirestoreError(e));
+        }
+        return;
+    }
+
+    // signup
+    if (!nick) return alert('닉네임을 입력하세요.');
+    if (nick.length < 2) return alert('닉네임은 2글자 이상으로 입력하세요.');
+    if (nick.length > 20) return alert('닉네임은 20글자 이하로 입력하세요.');
+
+    const nk = nicknameKey(nick);
+    if (!nk) return alert('닉네임 형식을 확인해 주세요.');
+
+    let cred = null;
+    try {
+        cred = await auth.createUserWithEmailAndPassword(email, pw);
+        const uid = cred.user.uid;
+
+        // 닉네임 중복 방지: nickname_index/{nk} 선점
+        const nickRef = db.collection(FIRESTORE_POINTS.nicknameIndex).doc(nk);
+        const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(uid);
+
+        await db.runTransaction(async (tx) => {
+            const [nSnap, pSnap] = await Promise.all([tx.get(nickRef), tx.get(profileRef)]);
+            if (nSnap.exists) throw new Error('이미 사용 중인 닉네임입니다.');
+            if (pSnap.exists) throw new Error('프로필이 이미 존재합니다.');
+
+            tx.set(nickRef, {
+                uid,
+                nickname: nick,
+                nicknameLower: nk,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+
+            tx.set(profileRef, {
+                uid,
+                nickname: nick,
+                nicknameLower: nk,
+                pointsApproved: false,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                approvedAt: null,
+                approvedBy: null
+            });
+        });
+
+        elements.authModal.classList.add('hidden');
+        showToast(`<i class="fa-solid fa-user-plus"></i> 회원가입 완료! 포인트는 관리자 승인 후 사용 가능합니다.`);
+    } catch (e) {
+        console.error(e);
+        // 회원가입은 성공했는데 프로필 생성이 실패하면 계정 삭제 처리(닉네임 중복 등)
+        try {
+            if (cred?.user) await cred.user.delete();
+        } catch {}
+        alert('회원가입 실패:\n\n' + (e?.message || formatFirestoreError(e)));
+    }
+}
+
+async function logout() {
+    try {
+        if (auth) await auth.signOut();
+    } catch (e) {
+        console.error(e);
+    }
 }
 
 function updateUserUI() {
@@ -2456,7 +2694,8 @@ function updateUserUI() {
         }
 
         if (elements.adminVerifyBtn) {
-            elements.adminVerifyBtn.classList.toggle('hidden', !!currentUser.isAdmin);
+            // Discord OAuth 기반 어드민 인증 버튼은 사용하지 않음
+            elements.adminVerifyBtn.classList.add('hidden');
         }
 
         if (elements.adminToolsBtn) {
@@ -2474,10 +2713,14 @@ function updateUserUI() {
             elements.writeNoticeBtn.classList.add('hidden');
         }
 
-        // 포인트 UI 갱신(헤더)
-        ensurePointDocsForCurrentUser().then(() => {
-            refreshPointsHeader().catch(() => {});
-        });
+        // 포인트 UI 갱신(헤더) - 승인된 유저/관리자만
+        if (currentUser.pointsApproved || currentUser.isAdmin) {
+            ensurePointDocsForCurrentUser().then(() => {
+                refreshPointsHeader().catch(() => {});
+            });
+        } else {
+            if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '승인필요';
+        }
     } else {
         elements.loginBtn.classList.remove('hidden');
         elements.userInfo.classList.add('hidden');
@@ -2550,7 +2793,6 @@ function handlePostSubmit(e) {
 
     if (!isEditMode) {
         currentUser.dps = myDps;
-        localStorage.setItem('rudra_user', JSON.stringify(currentUser));
     }
     
     const postData = {
@@ -2570,6 +2812,7 @@ function handlePostSubmit(e) {
         postData.createdAt = new Date().toISOString();
         postData.expirationTime = expirationMs;
         postData.status = 'recruiting';
+        postData.authorUid = currentUser.uid || null;
         postData.members = [{
             name: currentUser.name,
             class: currentUser.class,
@@ -2578,7 +2821,17 @@ function handlePostSubmit(e) {
             avatar: currentUser.avatar,
             isLeader: true
         }];
-        postData.author = { ...currentUser, dps: myDps };
+        // Firestore 저장용 author 객체는 최소 정보만 포함 (uid 포함)
+        postData.author = {
+            name: currentUser.name,
+            class: currentUser.class,
+            level: currentUser.level,
+            itemLevel: currentUser.itemLevel,
+            dps: myDps,
+            avatar: currentUser.avatar,
+            verified: !!currentUser.verified,
+            uid: currentUser.uid || null
+        };
     } else {
         // 수정 모드: 공지사항이면 expirationTime은 항상 0으로 유지
         if (editingPostData && editingPostData.type === 'notice') {
