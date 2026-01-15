@@ -127,6 +127,7 @@ async function ensurePointDocsForCurrentUser() {
                     claimed14: false,
                     totalDraws: 0,
                     totalWins: 0,
+                    gachaPity: 0,
                     updatedAt: nowIso
                 });
             } else {
@@ -613,7 +614,8 @@ async function refreshGachaPanel(opts = {}) {
         const snap = await stateRef.get();
         const st = snap.exists ? snap.data() : {};
         const totalDraws = Number(st?.totalDraws) || 0;
-        const rate = Math.min(POINTS.BASE_RATE * (1 + totalDraws), 1);
+        const pity = Number(st?.gachaPity) || 0; // 당첨 전까지 누적(당첨 시 0으로 초기화)
+        const rate = Math.min(POINTS.BASE_RATE * (1 + pity), 1);
 
         if (elements.gachaTotalDraws) elements.gachaTotalDraws.textContent = fmtInt(totalDraws);
         if (elements.gachaAppliedRate) elements.gachaAppliedRate.textContent = fmtRate(rate);
@@ -650,7 +652,8 @@ async function doGachaDraw() {
 
             const st = stSnap.exists ? stSnap.data() : {};
             const beforeDraws = Number(st?.totalDraws) || 0;
-            const appliedRate = Math.min(POINTS.BASE_RATE * (1 + beforeDraws), 1);
+            const pity = Number(st?.gachaPity) || 0;
+            const appliedRate = Math.min(POINTS.BASE_RATE * (1 + pity), 1);
 
             const u = new Uint32Array(1);
             crypto.getRandomValues(u);
@@ -699,10 +702,11 @@ async function doGachaDraw() {
                 userNickname: currentUser.name,
                 totalDraws: beforeDraws + 1,
                 totalWins: (Number(st?.totalWins) || 0) + (isWin ? 1 : 0),
+                gachaPity: isWin ? 0 : (pity + 1),
                 updatedAt: nowIso
             }, { merge: true });
 
-            return { ok: true, appliedRate, beforeDraws, roll, isWin };
+            return { ok: true, appliedRate, beforeDraws, pity, roll, isWin };
         });
 
         if (!result?.ok) {
@@ -712,12 +716,27 @@ async function doGachaDraw() {
 
         const msg =
             `결과: ${result.isWin ? '당첨' : '꽝'}\n` +
-            `이번 적용 확률: ${fmtRate(result.appliedRate)} (이전 누적 ${fmtInt(result.beforeDraws)}회)\n` +
-            `roll: ${result.roll} / 999999`;
+            `이번 적용 확률: ${fmtRate(result.appliedRate)} (당첨 전 누적 ${fmtInt(result.pity)}회)\n` +
+            `roll: ${result.roll} / 999999\n` +
+            (result.isWin ? `\n※ 당첨되어 확률 증가가 초기화됩니다.` : '');
 
         if (elements.gachaResult) {
             elements.gachaResult.classList.remove('hidden');
             elements.gachaResult.textContent = msg;
+            // 당첨 강조
+            if (result.isWin) {
+                elements.gachaResult.style.borderColor = 'rgba(16, 185, 129, 0.6)';
+                elements.gachaResult.style.background = 'rgba(16, 185, 129, 0.10)';
+            } else {
+                elements.gachaResult.style.borderColor = 'var(--border)';
+                elements.gachaResult.style.background = 'rgba(255,255,255,0.03)';
+            }
+        }
+
+        if (result.isWin) {
+            showToast(`<i class="fa-solid fa-trophy"></i> 당첨! (확률 초기화)`);
+        } else {
+            showToast(`<i class="fa-solid fa-dice"></i> 뽑기 완료`);
         }
 
         await refreshPointsAll();
@@ -858,7 +877,13 @@ window.approvePointsForUser = async function(uid) {
 
     try {
         await db.runTransaction(async (tx) => {
-            const pSnap = await tx.get(profileRef);
+            // 트랜잭션 규칙: 모든 read를 먼저 수행해야 함
+            const { summaryRef, stateRef } = getPointsRefsForUser(uid);
+            const [pSnap, sSnap, stSnap] = await Promise.all([
+                tx.get(profileRef),
+                tx.get(summaryRef),
+                tx.get(stateRef)
+            ]);
             if (!pSnap.exists) throw new Error('프로필이 없습니다.');
             const p = pSnap.data() || {};
             if (p.pointsApproved === true) return;
@@ -866,17 +891,14 @@ window.approvePointsForUser = async function(uid) {
             tx.set(profileRef, { pointsApproved: true, approvedAt: now, approvedBy: currentUser.uid }, { merge: true });
 
             // 승인과 동시에 포인트 문서도 초기화(요약/상태)
-            const { summaryRef, stateRef } = getPointsRefsForUser(uid);
             const nowIso = new Date().toISOString();
             const nick = String(p.nickname || '').trim();
 
-            const sSnap = await tx.get(summaryRef);
             if (!sSnap.exists) {
                 tx.set(summaryRef, { userId: uid, userNickname: nick, balance: 0, lifetimeEarned: 0, updatedAt: nowIso });
             }
-            const stSnap = await tx.get(stateRef);
             if (!stSnap.exists) {
-                tx.set(stateRef, { userId: uid, userNickname: nick, lastCheckinKstDate: null, currentStreakDays: 0, claimed3: false, claimed7: false, claimed14: false, totalDraws: 0, totalWins: 0, updatedAt: nowIso });
+                tx.set(stateRef, { userId: uid, userNickname: nick, lastCheckinKstDate: null, currentStreakDays: 0, claimed3: false, claimed7: false, claimed14: false, totalDraws: 0, totalWins: 0, gachaPity: 0, updatedAt: nowIso });
             }
         });
 
@@ -1296,6 +1318,8 @@ const elements = {
     authTabSignup: document.getElementById('authTabSignup'),
     authLoginId: document.getElementById('authLoginId'),
     authPassword: document.getElementById('authPassword'),
+    authPasswordConfirm: document.getElementById('authPasswordConfirm'),
+    authRememberMe: document.getElementById('authRememberMe'),
     loginBtn: document.getElementById('loginBtn'),
     userInfo: document.getElementById('userInfo'),
     userNickname: document.getElementById('userNickname'),
@@ -2549,6 +2573,13 @@ function setAuthMode(mode) {
     if (elements.authPassword) {
         elements.authPassword.setAttribute('autocomplete', isSignup ? 'new-password' : 'current-password');
     }
+
+    // 비밀번호 확인(회원가입만)
+    if (elements.authPasswordConfirm) {
+        elements.authPasswordConfirm.value = '';
+        const grp = elements.authPasswordConfirm.closest('.form-group');
+        if (grp) grp.classList.toggle('hidden', !isSignup);
+    }
 }
 
 async function initAuth() {
@@ -2572,7 +2603,11 @@ async function initAuth() {
                 await auth.signOut();
                 currentUser = null;
                 updateUserUI();
-                alert('회원 프로필이 없습니다. 다시 회원가입해 주세요.');
+                alert(
+                    '회원 프로필이 없습니다. 다시 회원가입해 주세요.\n\n' +
+                    '- 보통 회원가입 중 Firestore 권한(Rules) 문제로 프로필 생성이 실패했을 때 발생합니다.\n' +
+                    '- Firebase 콘솔의 Authentication에 사용자만 생성되고, Firestore에 user_profiles가 없을 수 있습니다.'
+                );
                 return;
             }
 
@@ -2614,6 +2649,17 @@ function loginIdToEmail(loginId) {
     return `${id}@aion2rudra.local`;
 }
 
+async function applyAuthPersistence() {
+    if (!auth) return;
+    const remember = !!elements.authRememberMe?.checked;
+    const p = remember ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION;
+    try {
+        await auth.setPersistence(p);
+    } catch (e) {
+        console.error('setPersistence failed:', e);
+    }
+}
+
 async function submitAuthForm() {
     if (!auth || !db) return alert('Auth/DB 초기화가 필요합니다.');
 
@@ -2628,6 +2674,7 @@ async function submitAuthForm() {
 
     if (authMode === 'login') {
         try {
+            await applyAuthPersistence();
             await auth.signInWithEmailAndPassword(email, pw);
             elements.authModal.classList.add('hidden');
         } catch (e) {
@@ -2645,8 +2692,13 @@ async function submitAuthForm() {
     const nk = nicknameKey(nick);
     if (!nk) return alert('닉네임 형식을 확인해 주세요.');
 
+    const pw2 = String(elements.authPasswordConfirm?.value || '');
+    if (!pw2) return alert('비밀번호 확인을 입력하세요.');
+    if (pw !== pw2) return alert('비밀번호와 비밀번호 확인이 일치하지 않습니다.');
+
     let cred = null;
     try {
+        await applyAuthPersistence();
         cred = await auth.createUserWithEmailAndPassword(email, pw);
         const uid = cred.user.uid;
 
@@ -2687,7 +2739,11 @@ async function submitAuthForm() {
         try {
             if (cred?.user) await cred.user.delete();
         } catch {}
-        alert('회원가입 실패:\n\n' + (e?.message || formatFirestoreError(e)));
+        alert(
+            '회원가입 실패:\n\n' +
+            (e?.message || formatFirestoreError(e)) +
+            '\n\n(대부분 Firestore Rules에서 user_profiles/nickname_index 생성이 막혀서 발생합니다. Rules 수정 후 다시 시도하세요.)'
+        );
     }
 }
 

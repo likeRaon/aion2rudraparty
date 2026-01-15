@@ -152,11 +152,25 @@
                     <div id="authNicknameGroup" class="form-group hidden">
                         <label>닉네임 (회원가입 시 1회 설정, 이후 변경 불가)</label>
                         <input type="text" id="authNickname" placeholder="사이트에서 표시될 닉네임" autocomplete="nickname">
+                        <div class="form-group" style="margin-top: 12px;">
+                            <label>비밀번호 확인</label>
+                            <input type="password" id="authPasswordConfirm" placeholder="비밀번호 확인" autocomplete="new-password">
+                        </div>
                         <p style="margin-top: 6px; color: var(--warning); font-size: 0.85rem;">
                             * 닉네임은 회원가입 후 변경할 수 없습니다.
                         </p>
                         <p style="margin-top: 6px; color: var(--text-muted); font-size: 0.85rem; line-height: 1.55;">
                             * 포인트 기능은 <b>관리자 승인</b> 후 사용할 수 있습니다. (승인 전: 출석/뽑기/랭킹/원장 이용 불가)
+                        </p>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 10px; margin-bottom: 14px;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color: var(--text-sub); font-size: 0.9rem;">
+                            <input type="checkbox" id="authRememberMe" checked style="width:auto; transform: translateY(1px);">
+                            로그인 상태 유지
+                        </label>
+                        <p style="margin-top: 6px; color: var(--text-muted); font-size: 0.85rem; line-height: 1.55;">
+                            * 공용 PC에서는 체크 해제 권장
                         </p>
                     </div>
 
@@ -764,7 +778,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     
-    <script src="script.js?v=20260115-2"></script>
+    <script src="script.js?v=20260115-3"></script>
 </body>
 
 </html>
