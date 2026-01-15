@@ -11,9 +11,31 @@ const DISCORD_POST_WEBHOOK_URL = atob(POST_WEBHOOK_SECRET);
 const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
 
 // 뽑기 당첨 알림 (Discord 특정 채널 웹훅 필요)
-// - Discord 서버에서 해당 채널에 "Webhook"을 만들고 URL을 base64로 넣으세요.
-const GACHA_WIN_WEBHOOK_SECRET = 'https://discord.com/api/webhooks/1461253087606866022/u1PYYFXAEEaNl9z16ENXMerFVSd2w_GjWSZtVgYCNTngu0vcZLYrk_kskSWYkX-857wN';
-const DISCORD_GACHA_WIN_WEBHOOK_URL = GACHA_WIN_WEBHOOK_SECRET ? atob(GACHA_WIN_WEBHOOK_SECRET) : '';
+// 보안상 웹훅 URL(토큰 포함)은 코드에 하드코딩하지 마세요.
+// 관리자 브라우저의 localStorage에만 저장해서 사용합니다. (raw URL 또는 base64 둘 다 지원)
+//
+// 설정 방법(개발자도구 콘솔):
+// 1) raw URL 저장:
+//    localStorage.setItem('rudra_gacha_win_webhook_url', 'https://discord.com/api/webhooks/...')
+// 2) base64 저장:
+//    localStorage.setItem('rudra_gacha_win_webhook_url', btoa('https://discord.com/api/webhooks/...'))
+//
+// 삭제:
+//    localStorage.removeItem('rudra_gacha_win_webhook_url')
+const GACHA_WIN_WEBHOOK_STORAGE_KEY = 'rudra_gacha_win_webhook_url';
+
+function getGachaWinWebhookUrl() {
+    try {
+        const v = String(localStorage.getItem(GACHA_WIN_WEBHOOK_STORAGE_KEY) || '').trim();
+        if (!v) return '';
+        if (v.startsWith('https://') || v.startsWith('http://')) return v;
+        const decoded = atob(v);
+        if (decoded.startsWith('https://') || decoded.startsWith('http://')) return decoded;
+        return '';
+    } catch {
+        return '';
+    }
+}
 
 const DISCORD_ADMIN = {
 
@@ -1118,11 +1140,12 @@ async function sendLogToDiscord(lines) {
 }
 
 async function sendGachaWinToDiscord(payload) {
-    if (!DISCORD_GACHA_WIN_WEBHOOK_URL) return;
+    const url = getGachaWinWebhookUrl();
+    if (!url) return;
     try {
         const content = String(payload || '').trim();
         if (!content) return;
-        await fetch(`${DISCORD_GACHA_WIN_WEBHOOK_URL}?wait=false`, {
+        await fetch(`${url}?wait=false`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ content })
