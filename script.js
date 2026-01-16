@@ -176,7 +176,7 @@ function pointsTypeLabel(type) {
         case 'EARN_STREAK_14': return '14일 연속 출석 보너스';
         case 'SPEND_GACHA': return '뽑기 1회';
         case 'ADMIN_ADJUST': return '관리자 지급/회수';
-        case 'ROOT_BULK_ADJUST': return 'ROOT 일괄 지급/회수';
+        case 'ROOT_BULK_ADJUST': return '포인트 일괄 지급/회수';
         default: return type || '';
     }
 }
@@ -257,8 +257,21 @@ function getGachaControl(cfg) {
         gachaEnabled: cfg?.gachaEnabled === true, // 명시적으로 true일 때만
         roundNo: Number.isFinite(Number(cfg?.gachaRoundNo)) ? Math.floor(Number(cfg.gachaRoundNo)) : null,
         maxWinners: Number.isFinite(Number(cfg?.gachaMaxWinners)) ? Math.floor(Number(cfg.gachaMaxWinners)) : null,
-        winnersCount: Number.isFinite(Number(cfg?.gachaWinnersCount)) ? Math.floor(Number(cfg.gachaWinnersCount)) : 0
+        // winnersCount는 gacha_event에 쓰지 않고, 실제 winners/slots로부터 산출(보안/권한 문제 방지)
+        winnersCount: null
     };
+}
+
+async function getGachaWinnersCountBySlots(roundNo, maxWinners) {
+    if (!db || !roundNo || !maxWinners) return 0;
+    try {
+        const roundRef = db.collection(FIRESTORE_POINTS.gachaRounds).doc(String(roundNo));
+        const slotRefs = Array.from({ length: maxWinners }, (_, i) => roundRef.collection('slots').doc(String(i + 1)));
+        const snaps = await Promise.all(slotRefs.map(r => r.get()));
+        return snaps.filter(s => s.exists).length;
+    } catch {
+        return 0;
+    }
 }
 
 function pickNextLuckTier() {
@@ -468,9 +481,12 @@ function renderLedgerRows(list) {
         const when = it.kstDate ? `KST ${it.kstDate}` : '';
         const kst = it.createdAt ? (formatKst(it.createdAt) || '') : '';
         const reason = it.reasonText ? `사유: ${it.reasonText}` : '';
-        const ref = it.refType && it.refId ? `ref: ${it.refType}/${it.refId}` : '';
+        const giverRaw = it.adminNickname || it.adminUserId || '';
+        const needsGiver = it.type === 'ADMIN_ADJUST' || it.type === 'ROOT_BULK_ADJUST';
+        const giver = needsGiver ? (giverRaw ? `지급자: ${giverRaw}` : `지급자:`) : '';
 
-        const meta = [when, kst ? `(${kst})` : null, reason, ref].filter(Boolean).join('\n');
+        // ref(refType/refId)는 UI에서 숨김(불필요)
+        const meta = [when, kst ? `(${kst})` : null, reason, giver].filter(Boolean).join('\n');
         return `
             <div class="points-row">
                 <div class="left">
@@ -499,10 +515,11 @@ async function loadMyPointLedger() {
     }
 }
 
-async function doAttendanceCheck() {
+async function doAttendanceCheck(opts = {}) {
     if (!db) return alert('DB 연결이 필요합니다.');
     if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
+    const silent = !!opts.silent;
 
     const userId = currentUser.uid;
 
@@ -638,6 +655,7 @@ async function doAttendanceCheck() {
         });
 
         if (!result?.ok) {
+            if (silent) return;
             if (result.code === 'already') return showToast(`<i class="fa-solid fa-circle-info"></i> 오늘은 이미 출석 체크를 했습니다.`);
             if (result.code === 'daily_limit') return showToast(`<i class="fa-solid fa-circle-info"></i> 출석은 일일 최대 1회입니다.`);
             if (result.code === 'weekly_limit') return showToast(`<i class="fa-solid fa-circle-info"></i> 출석은 주간 최대 7회입니다.`);
@@ -649,7 +667,7 @@ async function doAttendanceCheck() {
         await refreshPointsAll();
     } catch (e) {
         console.error(e);
-        alert('출석 처리 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
+        if (!silent) alert('출석 처리 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
     }
 }
 
@@ -747,6 +765,7 @@ async function refreshGachaPanel(opts = {}) {
         const badge = eventActive ? (String(cfg?.publicText || '진행중')) : `-`;
         const cost = getGachaCost(cfg);
         const ctrl = getGachaControl(cfg);
+        const winnersCount = await getGachaWinnersCountBySlots(ctrl.roundNo, ctrl.maxWinners);
 
         if (elements.gachaTotalDraws) elements.gachaTotalDraws.textContent = fmtInt(totalDraws);
         if (elements.gachaEventBadge) elements.gachaEventBadge.textContent = badge;
@@ -767,11 +786,8 @@ async function refreshGachaPanel(opts = {}) {
             elements.gachaRoundText.textContent = ctrl.roundNo ? `${ctrl.roundNo}회차` : '-';
         }
         if (elements.gachaWinnersText) {
-            if (ctrl.roundNo && ctrl.maxWinners) {
-                elements.gachaWinnersText.textContent = `${ctrl.winnersCount}/${ctrl.maxWinners}`;
-            } else {
-                elements.gachaWinnersText.textContent = '-';
-            }
+            if (ctrl.roundNo && ctrl.maxWinners) elements.gachaWinnersText.textContent = `${winnersCount}/${ctrl.maxWinners}`;
+            else elements.gachaWinnersText.textContent = '-';
         }
 
         // 뽑기 버튼 상태
@@ -780,7 +796,7 @@ async function refreshGachaPanel(opts = {}) {
                 ctrl.gachaEnabled &&
                 ctrl.roundNo &&
                 ctrl.maxWinners &&
-                ctrl.winnersCount < ctrl.maxWinners;
+                winnersCount < ctrl.maxWinners;
             elements.gachaDrawBtn.disabled = !can;
         }
 
@@ -854,14 +870,17 @@ async function doGachaDraw() {
     try {
         const txPromise = db.runTransaction(async (tx) => {
             const cfgRef = db.collection(FIRESTORE_POINTS.gachaEvent).doc('current');
-            const winnerRef = db.collection(FIRESTORE_POINTS.gachaRounds).doc(String(ctrl.roundNo)).collection('winners').doc(userId);
+            const roundRef = db.collection(FIRESTORE_POINTS.gachaRounds).doc(String(ctrl.roundNo));
+            const winnerRef = roundRef.collection('winners').doc(userId);
+            const slotRefs = Array.from({ length: ctrl.maxWinners }, (_, i) => roundRef.collection('slots').doc(String(i + 1)));
 
-            const [sSnap, stSnap, spendSnap, cfgSnap, winnerSnap] = await Promise.all([
+            const [sSnap, stSnap, spendSnap, cfgSnap, winnerSnap, ...slotSnaps] = await Promise.all([
                 tx.get(summaryRef),
                 tx.get(stateRef),
                 tx.get(spendLedgerRef),
                 tx.get(cfgRef),
-                tx.get(winnerRef)
+                tx.get(winnerRef),
+                ...slotRefs.map(r => tx.get(r))
             ]);
             if (spendSnap.exists) return { ok: false, code: 'already' };
             if (winnerSnap.exists) return { ok: false, code: 'already_winner' };
@@ -871,7 +890,11 @@ async function doGachaDraw() {
             if (!ctrlNow.gachaEnabled) return { ok: false, code: 'gacha_disabled' };
             if (!ctrlNow.roundNo || !ctrlNow.maxWinners) return { ok: false, code: 'gacha_unconfigured' };
             if (ctrlNow.roundNo !== ctrl.roundNo) return { ok: false, code: 'round_changed' };
-            if (ctrlNow.winnersCount >= ctrlNow.maxWinners) return { ok: false, code: 'round_ended' };
+
+            const winnersCountNow = slotSnaps.filter(s => s.exists).length;
+            if (winnersCountNow >= ctrlNow.maxWinners) return { ok: false, code: 'round_ended' };
+            const alreadyWinnerBySlot = slotSnaps.some(s => s.exists && (s.data()?.uid === userId));
+            if (alreadyWinnerBySlot) return { ok: false, code: 'already_winner' };
 
             const sum = sSnap.exists ? sSnap.data() : {};
             const balance = Number(sum?.balance) || 0;
@@ -926,10 +949,20 @@ async function doGachaDraw() {
                 loseLuckOutcome: loseLuckOutcome
             });
 
-            // 당첨자 기록/회차 종료 처리
-            let winnersCountAfter = ctrlNow.winnersCount;
+            // 당첨자 기록(슬롯 점유로 당첨 인원 제한)
             if (isWin) {
-                winnersCountAfter = ctrlNow.winnersCount + 1;
+                const firstEmptyIdx = slotSnaps.findIndex(s => !s.exists);
+                if (firstEmptyIdx < 0) return { ok: false, code: 'round_ended' };
+                const slotRef = slotRefs[firstEmptyIdx];
+
+                tx.set(slotRef, {
+                    uid: userId,
+                    nickname: currentUser.name || '',
+                    wonAt: nowIso,
+                    drawId: drawId,
+                    roundNo: ctrlNow.roundNo,
+                    slotNo: firstEmptyIdx + 1
+                });
                 tx.set(winnerRef, {
                     uid: userId,
                     nickname: currentUser.name || '',
@@ -937,12 +970,6 @@ async function doGachaDraw() {
                     drawId: drawId,
                     roundNo: ctrlNow.roundNo
                 });
-                tx.set(cfgRef, {
-                    gachaWinnersCount: winnersCountAfter,
-                    gachaEnabled: winnersCountAfter >= ctrlNow.maxWinners ? false : true,
-                    updatedAt: nowIso,
-                    updatedBy: currentUser.uid
-                }, { merge: true });
             }
 
             // 요약 갱신 (누적 획득은 증가하지 않음)
@@ -1130,11 +1157,14 @@ async function loadPointsPublicAdminLog() {
             const target = it.targetNickname || it.targetUserId || '(unknown)';
             const kst = formatKst(it.createdAt) || '';
             const reason = it.reasonText || '';
+            const extra = (it.type === 'ROOT_BULK_ADJUST')
+                ? `\n처리: ${fmtInt(it.processedCount || 0)}명 / 제외: ${fmtInt(it.skippedCount || 0)}명`
+                : '';
             return `
                 <div class="points-row">
                     <div class="left">
                         <div class="title">${escapeHtml(admin)} → ${escapeHtml(target)}</div>
-                        <div class="meta">${escapeHtml(kst)}\n사유: ${escapeHtml(reason)}</div>
+                        <div class="meta">${escapeHtml(kst)}\n사유: ${escapeHtml(reason)}${escapeHtml(extra)}</div>
                     </div>
                     <div class="delta ${plus ? 'plus' : 'minus'}">${plus ? '+' : ''}${fmtInt(delta)}pt</div>
                 </div>
@@ -1204,15 +1234,11 @@ async function renderGachaEventConfigForRoot() {
         return;
     }
 
-    const enabled = cfg.enabled === true;
     const eventEnabled = cfg.eventEnabled ?? cfg.enabled ?? false;
     if (elements.gachaEventEnabled) elements.gachaEventEnabled.value = eventEnabled ? 'true' : 'false';
     if (elements.gachaEventMultiplier) elements.gachaEventMultiplier.value = String(cfg.multiplier ?? '');
     if (elements.gachaEventCostOverride) elements.gachaEventCostOverride.value = (cfg.costOverride === null || cfg.costOverride === undefined) ? '' : String(cfg.costOverride);
     if (elements.gachaEventMessage) elements.gachaEventMessage.value = String(cfg.publicText || '');
-    if (elements.gachaEnabled) elements.gachaEnabled.value = (cfg.gachaEnabled === true) ? 'true' : 'false';
-    if (elements.gachaRoundNo) elements.gachaRoundNo.value = String(cfg.gachaRoundNo ?? '');
-    if (elements.gachaMaxWinners) elements.gachaMaxWinners.value = String(cfg.gachaMaxWinners ?? '');
 
     // 저장된 UTC ISO를 KST datetime-local로 변환해서 표시
     const toKstLocal = (iso) => {
@@ -1230,10 +1256,70 @@ async function renderGachaEventConfigForRoot() {
         const startKst = cfg.startAtUtc ? (formatKst(cfg.startAtUtc) || '') : '';
         const endKst = cfg.endAtUtc ? (formatKst(cfg.endAtUtc) || '') : '';
         elements.gachaEventStatusText.textContent =
-            `뽑기: ${(cfg.gachaEnabled === true) ? '활성' : '비활성'} / 회차: ${cfg.gachaRoundNo ?? '-'} / 당첨: ${(cfg.gachaWinnersCount ?? 0)}/${(cfg.gachaMaxWinners ?? '-')}\n` +
             `확률 이벤트: ${eventEnabled ? (active ? '진행중' : '대기/종료') : '비활성'}\n` +
             `기간(KST): ${startKst} ~ ${endKst}\n` +
             `배수: ${cfg.multiplier ?? ''}`;
+    }
+}
+
+async function renderGachaControlForRoot() {
+    if (!elements.rootGachaControlCard || !currentUser?.isRoot) return;
+    const cfg = await loadGachaEventConfig(true);
+    if (!cfg) {
+        if (elements.gachaControlStatusText) elements.gachaControlStatusText.textContent = '현재 저장된 뽑기 운영 설정이 없습니다.';
+        return;
+    }
+
+    if (elements.gachaEnabled) elements.gachaEnabled.value = (cfg.gachaEnabled === true) ? 'true' : 'false';
+    if (elements.gachaRoundNo) elements.gachaRoundNo.value = String(cfg.gachaRoundNo ?? '');
+    if (elements.gachaMaxWinners) elements.gachaMaxWinners.value = String(cfg.gachaMaxWinners ?? '');
+
+    if (elements.gachaControlStatusText) {
+        elements.gachaControlStatusText.textContent =
+            `뽑기: ${(cfg.gachaEnabled === true) ? '활성' : '비활성'} / ` +
+            `회차: ${cfg.gachaRoundNo ?? '-'} / ` +
+            `당첨: ${(cfg.gachaWinnersCount ?? 0)}/${(cfg.gachaMaxWinners ?? '-')}`;
+    }
+}
+
+async function saveGachaControlConfig() {
+    if (!currentUser?.isRoot) return alert('ROOT만 가능합니다.');
+    if (!db) return alert('DB 연결이 필요합니다.');
+
+    const gachaEnabled = String(elements.gachaEnabled?.value || 'false') === 'true';
+    const gachaRoundNo = Math.max(1, Math.floor(parseFloat(elements.gachaRoundNo?.value || '1') || 1));
+    const gachaMaxWinners = Math.max(1, Math.floor(parseFloat(elements.gachaMaxWinners?.value || '1') || 1));
+
+    const ref = db.collection(FIRESTORE_POINTS.gachaEvent).doc('current');
+    try {
+        // 회차가 변경되면 당첨 카운트는 0으로 리셋
+        const prev = await ref.get().then(s => (s.exists ? (s.data() || {}) : {})).catch(() => ({}));
+        const prevRound = prev?.gachaRoundNo ?? null;
+        const resetWinners = prevRound !== gachaRoundNo;
+
+        await ref.set({
+            gachaEnabled,
+            gachaRoundNo,
+            gachaMaxWinners,
+            gachaWinnersCount: resetWinners ? 0 : (prev?.gachaWinnersCount ?? 0),
+            updatedAt: new Date().toISOString(),
+            updatedBy: currentUser.uid
+        }, { merge: true });
+
+        // 회차 메타(슬롯 규칙용)도 저장
+        await db.collection(FIRESTORE_POINTS.gachaRounds).doc(String(gachaRoundNo)).set({
+            roundNo: gachaRoundNo,
+            maxWinners: gachaMaxWinners,
+            updatedAt: new Date().toISOString(),
+            updatedBy: currentUser.uid
+        }, { merge: true });
+
+        showToast(`<i class="fa-solid fa-floppy-disk"></i> 뽑기 운영 저장 완료`);
+        await loadGachaEventConfig(true);
+        await Promise.all([renderGachaControlForRoot(), refreshGachaPanel()]);
+    } catch (e) {
+        console.error(e);
+        alert('저장 실패:\n\n' + formatFirestoreError(e));
     }
 }
 
@@ -1248,9 +1334,6 @@ async function saveGachaEventConfig() {
     const costOverrideRaw = String(elements.gachaEventCostOverride?.value || '').trim();
     const costOverride = costOverrideRaw ? Math.max(0, Math.floor(parseFloat(costOverrideRaw) || 0)) : null;
     const publicText = String(elements.gachaEventMessage?.value || '').trim();
-    const gachaEnabled = String(elements.gachaEnabled?.value || 'false') === 'true';
-    const gachaRoundNo = Math.max(1, Math.floor(parseFloat(elements.gachaRoundNo?.value || '1') || 1));
-    const gachaMaxWinners = Math.max(1, Math.floor(parseFloat(elements.gachaMaxWinners?.value || '1') || 1));
 
     const startUtcIso = parseKstDateTimeLocalToUtcIso(startKst);
     const endUtcIso = parseKstDateTimeLocalToUtcIso(endKst);
@@ -1262,11 +1345,6 @@ async function saveGachaEventConfig() {
 
     const ref = db.collection(FIRESTORE_POINTS.gachaEvent).doc('current');
     try {
-        // 회차가 변경되면 당첨 카운트는 0으로 리셋
-        const prev = await ref.get().then(s => (s.exists ? (s.data() || {}) : {})).catch(() => ({}));
-        const prevRound = prev?.gachaRoundNo ?? null;
-        const resetWinners = prevRound !== gachaRoundNo;
-
         await ref.set({
             eventEnabled,
             startAtUtc: startUtcIso,
@@ -1274,17 +1352,13 @@ async function saveGachaEventConfig() {
             multiplier: mult,
             costOverride: costOverride,
             publicText: publicText,
-            gachaEnabled,
-            gachaRoundNo,
-            gachaMaxWinners,
-            gachaWinnersCount: resetWinners ? 0 : (prev?.gachaWinnersCount ?? 0),
             updatedAt: new Date().toISOString(),
             updatedBy: currentUser.uid
         }, { merge: true });
 
         showToast(`<i class="fa-solid fa-wand-magic-sparkles"></i> 이벤트 설정 저장 완료`);
         await loadGachaEventConfig(true);
-        await Promise.all([renderGachaEventConfigForRoot(), refreshGachaPanel()]);
+        await Promise.all([renderGachaEventConfigForRoot(), refreshGachaPanel(), refreshEventPanel()]);
     } catch (e) {
         console.error(e);
         alert('저장 실패:\n\n' + formatFirestoreError(e));
@@ -1319,7 +1393,7 @@ async function refreshEventPanel() {
     }
 
     // ROOT 설정 UI 동기화
-    await renderGachaEventConfigForRoot();
+    await Promise.all([renderGachaControlForRoot(), renderGachaEventConfigForRoot()]);
 }
 
 async function loadGachaWinnersList(roundNo) {
@@ -1444,6 +1518,26 @@ async function rootBulkAdjustAllUsers() {
                 processed++;
                 if (processed % 10 === 0) status(`진행중... 처리 ${processed}명 / 제외 ${skipped}명`);
             }
+        }
+
+        // 공개 로그에도 기록(포인트 로그 탭)
+        try {
+            const publicRef = db.collection(FIRESTORE_POINTS.publicAdminLog).doc(bulkId);
+            await publicRef.set({
+                type: 'ROOT_BULK_ADJUST',
+                delta,
+                reasonText: reason,
+                adminNickname: currentUser.name || 'ROOT',
+                adminId: currentUser.uid,
+                targetNickname: target === 'approved_only' ? '전체(승인된 계정)' : '전체(모든 계정)',
+                targetUserId: null,
+                processedCount: processed,
+                skippedCount: skipped,
+                createdAt: nowIso,
+                kstDate: getKstDateKeyFromNow()
+            }, { merge: true });
+        } catch (e) {
+            console.warn('public log write failed:', e);
         }
 
         status(`완료: 처리 ${processed}명 / 제외 ${skipped}명`);
@@ -1619,6 +1713,8 @@ let editingPostData = null; // 수정 중인 글 데이터
 let currentCalcData = null; // 현재 계산기용 데이터
 let lastSimulatedScore = null; // 시뮬레이터 직전 계산값(변화량 표시용)
 let lastSnapshotById = new Map(); // 하드 삭제 감지용(이전 스냅샷 캐시)
+let lastCharacterFetchError = null;
+let autoAttendanceRanThisSession = false;
 
 function getSessionId() {
     let sid = sessionStorage.getItem('rudra_session_id');
@@ -2071,6 +2167,9 @@ const elements = {
     pendingApprovalsReloadBtn: document.getElementById('pendingApprovalsReloadBtn'),
     pendingApprovalsList: document.getElementById('pendingApprovalsList'),
     rootEventCard: document.getElementById('rootEventCard'),
+    rootGachaControlCard: document.getElementById('rootGachaControlCard'),
+    saveGachaControlBtn: document.getElementById('saveGachaControlBtn'),
+    gachaControlStatusText: document.getElementById('gachaControlStatusText'),
     rootBulkPointsCard: document.getElementById('rootBulkPointsCard'),
     rootBulkMode: document.getElementById('rootBulkMode'),
     rootBulkAmount: document.getElementById('rootBulkAmount'),
@@ -2224,6 +2323,7 @@ function setupEventListeners() {
     if (elements.gachaRefreshBtn) elements.gachaRefreshBtn.addEventListener('click', () => refreshGachaPanel({ showToastOnDone: true }));
     if (elements.adminAdjustSubmitBtn) elements.adminAdjustSubmitBtn.addEventListener('click', adminAdjustPoints);
     if (elements.pendingApprovalsReloadBtn) elements.pendingApprovalsReloadBtn.addEventListener('click', loadPendingApprovals);
+    if (elements.saveGachaControlBtn) elements.saveGachaControlBtn.addEventListener('click', saveGachaControlConfig);
     if (elements.saveGachaEventBtn) elements.saveGachaEventBtn.addEventListener('click', saveGachaEventConfig);
     if (elements.rootBulkApplyBtn) elements.rootBulkApplyBtn.addEventListener('click', rootBulkAdjustAllUsers);
 
@@ -2461,6 +2561,7 @@ async function handleHeaderSearch() {
     elements.headerSearchBtn.disabled = true;
 
     try {
+        lastCharacterFetchError = null;
         const charData = await fetchCharacterData(nickname);
         currentCalcData = charData; // 계산기용 데이터 저장
         
@@ -2468,7 +2569,7 @@ async function handleHeaderSearch() {
             // 검색 성공 -> 모달에 표시
             elements.searchResultContent.innerHTML = `
                 <div class="search-profile">
-                    <img src="${safeAvatarUrl(charData.profile_img, charData.name)}" class="search-avatar">
+                    <img src="${avatarUrlFromCharKeyOrFallback(charData.charId, charData.profile_img, charData.name)}" class="search-avatar">
                     <div class="search-name">${charData.name}</div>
                     <div class="search-class">${charData.class} (Lv.${charData.level})</div>
                 </div>
@@ -2497,12 +2598,16 @@ async function handleHeaderSearch() {
             elements.openCalculatorBtn.classList.remove('hidden');
             
         } else {
-            alert('캐릭터를 찾을 수 없습니다.');
+            if (lastCharacterFetchError) {
+                alert('캐릭터 검색에 실패했습니다.\n\n' + lastCharacterFetchError);
+            } else {
+                alert('캐릭터를 찾을 수 없습니다.');
+            }
             elements.openCalculatorBtn.classList.add('hidden');
         }
     } catch (err) {
         console.error(err);
-        alert('검색 중 오류가 발생했습니다.');
+        alert('검색 중 오류가 발생했습니다.\n\n' + (err?.message || String(err)));
     } finally {
         elements.headerSearchBtn.innerHTML = originalBtnText;
         elements.headerSearchBtn.disabled = false;
@@ -2576,6 +2681,18 @@ function safeAvatarUrl(url, nameForFallback = 'A') {
     const u = String(url || '').trim();
     if (u && (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:'))) return u;
     return defaultAvatarDataUri(nameForFallback);
+}
+
+function ingameAvatarUrl(charKey, serverId = 2002) {
+    const ck = String(charKey || '').trim();
+    if (!ck) return '';
+    return `https://profileimg.plaync.com/game_profile_images/aion2/images?gameServerKey=${encodeURIComponent(String(serverId))}&charKey=${encodeURIComponent(ck)}`;
+}
+
+function avatarUrlFromCharKeyOrFallback(charKey, fallbackUrl, nameForFallback = 'A') {
+    const ingame = ingameAvatarUrl(charKey);
+    if (ingame) return ingame;
+    return safeAvatarUrl(fallbackUrl, nameForFallback);
 }
 
 // =========================
@@ -3326,6 +3443,17 @@ async function initAuth() {
             };
 
             updateUserUI();
+
+            // 로그인만 해도 자동 출석(승인 유저/관리자/ROOT만)
+            try {
+                if (!autoAttendanceRanThisSession && (currentUser.pointsApproved || currentUser.isAdmin || currentUser.isRoot)) {
+                    autoAttendanceRanThisSession = true;
+                    await ensurePointDocsForCurrentUser();
+                    await doAttendanceCheck({ silent: true });
+                }
+            } catch (e) {
+                console.warn('auto attendance failed:', e);
+            }
         } catch (e) {
             console.error(e);
             alert('로그인 상태를 불러오는 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
@@ -3501,6 +3629,9 @@ function updateUserUI() {
         if (elements.rootEventCard) {
             elements.rootEventCard.classList.toggle('hidden', !currentUser.isRoot);
         }
+        if (elements.rootGachaControlCard) {
+            elements.rootGachaControlCard.classList.toggle('hidden', !currentUser.isRoot);
+        }
         if (elements.rootBulkPointsCard) {
             elements.rootBulkPointsCard.classList.toggle('hidden', !currentUser.isRoot);
         }
@@ -3531,6 +3662,7 @@ function updateUserUI() {
         if (elements.pointsAdminTabBtn) elements.pointsAdminTabBtn.classList.add('hidden');
         if (elements.pointsEventTabBtn) elements.pointsEventTabBtn.classList.add('hidden');
         if (elements.rootEventCard) elements.rootEventCard.classList.add('hidden');
+        if (elements.rootGachaControlCard) elements.rootGachaControlCard.classList.add('hidden');
         if (elements.rootBulkPointsCard) elements.rootBulkPointsCard.classList.add('hidden');
         if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '0pt';
     }
@@ -3621,6 +3753,7 @@ function handlePostSubmit(e) {
             class: currentUser.class,
             dps: myDps, 
             itemLevel: currentUser.itemLevel,
+            charKey: currentUser.charKey || null,
             avatar: currentUser.avatar,
             isLeader: true
         }];
@@ -3631,6 +3764,7 @@ function handlePostSubmit(e) {
             level: currentUser.level,
             itemLevel: currentUser.itemLevel,
             dps: myDps,
+            charKey: currentUser.charKey || null,
             avatar: currentUser.avatar,
             verified: !!currentUser.verified,
             uid: currentUser.uid || null
@@ -3984,6 +4118,7 @@ async function refreshCurrentUserCharacter() {
             level: data.level,
             itemLevel: data.item_level,
             avatar: data.profile_img,
+            charKey: data.charId || null,
             verified: true,
             dps: keepDps
         };
@@ -4171,7 +4306,7 @@ function renderPosts() {
             let membersHtml = '';
             if (post.members && post.members.length > 0) {
                 post.members.slice(0, 5).forEach(m => {
-                    const avatarSrc = safeAvatarUrl(m.avatar, m.name);
+                    const avatarSrc = avatarUrlFromCharKeyOrFallback(m.charKey, m.avatar, m.name);
                     membersHtml += `
                         <img src="${avatarSrc}" 
                              class="full-member-avatar" 
@@ -4221,7 +4356,7 @@ function renderPosts() {
                 
                 <div class="post-footer">
                     <div class="author-info">
-                        <img src="${safeAvatarUrl(post.author.avatar, post.author.name)}" class="author-avatar" onerror="this.src=defaultAvatarDataUri('U')">
+                        <img src="${avatarUrlFromCharKeyOrFallback(post.author.charKey, post.author.avatar, post.author.name)}" class="author-avatar" onerror="this.src=defaultAvatarDataUri('U')">
                         <div class="author-detail">
                             <div class="author-name">${post.author.name}</div>
                             <div class="author-meta">
@@ -4293,7 +4428,7 @@ function renderDetailPartyList(post) {
     const authorItemLevel = document.getElementById('detailAuthorItemLevel');
 
     if (post.author) {
-        authorAvatar.src = safeAvatarUrl(post.author.avatar, post.author.name);
+        authorAvatar.src = avatarUrlFromCharKeyOrFallback(post.author.charKey, post.author.avatar, post.author.name);
         authorAvatar.onerror = () => { authorAvatar.src = defaultAvatarDataUri('U'); };
         authorName.textContent = post.author.name;
         authorClass.textContent = post.author.class;
@@ -4310,7 +4445,7 @@ function renderDetailPartyList(post) {
     
     if (post.members && post.members.length > 0) {
         post.members.forEach(m => {
-            const avatarSrc = safeAvatarUrl(m.avatar, m.name);
+            const avatarSrc = avatarUrlFromCharKeyOrFallback(m.charKey, m.avatar, m.name);
             const dpsVal = m.dps > 0 ? `DPS ${m.dps.toLocaleString()}` : '';
             const itemLevelVal = m.itemLevel || 0;
 
@@ -4499,20 +4634,43 @@ function deletePost() {
 
 async function fetchCharacterData(nickname) {
     try {
-        const searchUrl = `${PROXY_URL}https://api.aon2.info/api/v1/aion2/rankings/item-level/search?characterName=${encodeURIComponent(nickname)}&raceId=2&serverId=2002`;
-        const searchRes = await fetch(searchUrl);
-        if (!searchRes.ok) {
-            const txt = await searchRes.text().catch(() => '');
-            console.warn('character search failed:', searchRes.status, txt.slice(0, 200));
-            throw new Error(`search http ${searchRes.status}`);
+        lastCharacterFetchError = null;
+
+        // raceId/응답 구조 변경에 대비: 여러 케이스로 검색 시도
+        const base = `${PROXY_URL}https://api.aon2.info/api/v1/aion2/rankings/item-level/search?characterName=${encodeURIComponent(nickname)}&serverId=2002`;
+        const candidates = [
+            `${base}&raceId=2`,
+            `${base}&raceId=1`,
+            `${base}`
+        ];
+
+        let searchJson = null;
+        let lastErrText = '';
+        for (const url of candidates) {
+            const res = await fetch(url);
+            const txt = await res.text().catch(() => '');
+            if (!res.ok) {
+                lastErrText = txt;
+                continue;
+            }
+            try {
+                searchJson = JSON.parse(txt);
+            } catch {
+                searchJson = null;
+            }
+            if (searchJson) break;
         }
-        let searchJson;
-        try {
-            searchJson = await searchRes.json();
-        } catch {
-            const txt = await searchRes.text().catch(() => '');
-            // 혹시 문자열(JSON stringified)로 오는 케이스 대비
-            try { searchJson = JSON.parse(txt); } catch { searchJson = null; }
+        if (!searchJson) {
+            if (lastErrText) {
+                try {
+                    const j = JSON.parse(lastErrText);
+                    if (j?.message) lastCharacterFetchError = String(j.message);
+                } catch {}
+            }
+            if (!lastCharacterFetchError) {
+                lastCharacterFetchError = (PROXY_URL ? 'API 응답을 해석할 수 없습니다.' : 'API 호출이 막혔을 수 있습니다. (CORS/프록시 필요)');
+            }
+            return null;
         }
         
         const character =
@@ -4520,7 +4678,13 @@ async function fetchCharacterData(nickname) {
             searchJson?.character ||
             (Array.isArray(searchJson?.data?.characters) ? searchJson.data.characters[0] : null) ||
             null;
-        if (!character) return null;
+        if (!character) {
+            // ok(200)인데 구조가 달라졌을 때 사용자에게 힌트 제공
+            const k1 = Object.keys(searchJson || {}).slice(0, 10).join(', ');
+            const k2 = Object.keys(searchJson?.data || {}).slice(0, 10).join(', ');
+            lastCharacterFetchError = `검색 결과가 없습니다(또는 API 응답 구조 변경).\nkeys: [${k1}] / data: [${k2}]`;
+            return null;
+        }
 
         const charId = character.characterId || character.id || character.character_id;
         if (!charId) return null;
@@ -4569,6 +4733,7 @@ async function fetchCharacterData(nickname) {
         };
     } catch (error) {
         console.error(error);
+        lastCharacterFetchError = error?.message ? String(error.message) : String(error);
         return null;
     }
 }

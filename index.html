@@ -784,8 +784,8 @@
                         <div id="eventPublicBox" class="points-result-box">-</div>
                     </div>
 
-                    <div id="rootEventCard" class="points-card hidden" style="margin-top: 14px;">
-                        <div class="points-card-title">ROOT 전용: 이벤트 설정 (KST)</div>
+                    <div id="rootGachaControlCard" class="points-card hidden" style="margin-top: 14px;">
+                        <div class="points-card-title">ROOT 전용: 뽑기 운영(활성/회차/당첨인원)</div>
                         <div class="points-admin-form">
                             <div class="form-group">
                                 <label>뽑기 활성화</label>
@@ -805,9 +805,17 @@
                                 <label>당첨 인원</label>
                                 <input type="number" id="gachaMaxWinners" step="1" min="1" placeholder="예: 3">
                                 <p style="margin-top:6px; color: var(--text-muted); font-size: 0.85rem;">
-                                    * 당첨 인원이 채워지면 해당 회차는 종료되고 더 이상 뽑을 수 없습니다.
+                                    * 당첨 인원이 채워지면 해당 회차는 자동 종료됩니다.
                                 </p>
                             </div>
+                            <button id="saveGachaControlBtn" class="btn-success full-width"><i class="fa-solid fa-floppy-disk"></i> 뽑기 운영 저장</button>
+                            <div id="gachaControlStatusText" class="points-hint" style="margin-top:10px;">-</div>
+                        </div>
+                    </div>
+
+                    <div id="rootEventCard" class="points-card hidden" style="margin-top: 14px;">
+                        <div class="points-card-title">ROOT 전용: 확률/비용 이벤트 설정 (KST)</div>
+                        <div class="points-admin-form">
                             <div class="form-group">
                                 <label>이벤트 활성화</label>
                                 <select id="gachaEventEnabled">
@@ -829,16 +837,16 @@
                             </div>
                             <div class="form-group">
                                 <label>뽑기 1회 비용(선택)</label>
-                                <input type="number" id="gachaEventCostOverride" step="1" min="0" placeholder="예: 150 (비워두면 300 유지)">
+                                <input type="number" id="gachaEventCostOverride" step="1" min="0" placeholder="예: 50 (비워두면 100 유지)">
                                 <p style="margin-top:6px; color: var(--text-muted); font-size: 0.85rem;">
-                                    * 예: 300 → 150로 보이게 표시되고 실제 차감도 150으로 적용됩니다.
+                                    * 예: 100 → 50로 보이게 표시되고 실제 차감도 50으로 적용됩니다.
                                 </p>
                             </div>
                             <div class="form-group">
                                 <label>유저에게 보여줄 문구</label>
                                 <textarea id="gachaEventMessage" placeholder="예: 신년 이벤트 진행중! 뽑기 확률 UP + 비용 할인!" style="min-height: 100px;"></textarea>
                             </div>
-                            <button id="saveGachaEventBtn" class="btn-success full-width"><i class="fa-solid fa-wand-magic-sparkles"></i> 저장</button>
+                            <button id="saveGachaEventBtn" class="btn-success full-width"><i class="fa-solid fa-wand-magic-sparkles"></i> 이벤트 저장</button>
                             <div id="gachaEventStatusText" class="points-hint" style="margin-top:10px;">-</div>
                         </div>
                     </div>
@@ -939,7 +947,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     
-    <script src="script.js?v=20260115-6"></script>
+    <script src="script.js?v=20260116-1"></script>
 </body>
 
 </html>
