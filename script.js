@@ -10,29 +10,6 @@ const LOG_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4
 const DISCORD_POST_WEBHOOK_URL = 'https://discord.com/api/webhooks/1456559257078988821/5T73OUqYLgg1DaK5JI73Dv8Z_c7MVPbj6WRA4surCJZCVWIozOUhz_kX0aTGbJLwZBKF';
 const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
 
-// 뽑기 당첨 알림 (Discord 특정 채널 웹훅)
-// ⚠️ 코드에 웹훅 URL을 넣으면 누구나 스팸 전송이 가능해집니다.
-// 사용자가 요청한 “하드코딩 방식”으로 동작하도록 아래 상수에 웹훅 URL을 넣어두면
-// 모든 사용자 당첨 시 자동으로 디스코드에 전송됩니다.
-const DISCORD_GACHA_WIN_WEBHOOK_URL = 'https://discord.com/api/webhooks/1461253087606866022/u1PYYFXAEEaNl9z16ENXMerFVSd2w_GjWSZtVgYCNTngu0vcZLYrk_kskSWYkX-857wN';
-
-// (옵션) 하드코딩이 부담되면 localStorage에 넣는 방식도 지원
-const GACHA_WIN_WEBHOOK_STORAGE_KEY = 'rudra_gacha_win_webhook_url';
-
-function getGachaWinWebhookUrl() {
-    try {
-        if (DISCORD_GACHA_WIN_WEBHOOK_URL) return DISCORD_GACHA_WIN_WEBHOOK_URL;
-        const v = String(localStorage.getItem(GACHA_WIN_WEBHOOK_STORAGE_KEY) || '').trim();
-        if (!v) return '';
-        if (v.startsWith('https://') || v.startsWith('http://')) return v;
-        const decoded = atob(v);
-        if (decoded.startsWith('https://') || decoded.startsWith('http://')) return decoded;
-        return '';
-    } catch {
-        return '';
-    }
-}
-
 const DISCORD_ADMIN = {
 
     clientId: '1440197568847151214',
@@ -52,7 +29,6 @@ const CONSTANTS = {
 // =========================
 const POINTS = {
     COST_GACHA: 100,
-    BASE_RATE: 0.0005, // 0.05%
     EARN: {
         ATTENDANCE: 10,
         POST: 10,
@@ -95,7 +71,7 @@ function nicknameKey(nick) {
 }
 
 function getKstDateKeyFromNow() {
-    // KST는 UTC+9 고정(서머타임 없음). "지금"을 +9h shift한 뒤 UTC 기준 날짜를 key로 사용.
+    // KST는 UTC+9 고정(서머타임 없음). +9h shift한 뒤 UTC 기준 날짜를 key로 사용.
     const d = new Date(Date.now() + 9 * 60 * 60 * 1000);
     return d.toISOString().slice(0, 10); // YYYY-MM-DD
 }
@@ -122,45 +98,8 @@ function getPointsRefsForUser(userId) {
 async function ensurePointDocsForCurrentUser() {
     if (!db) return;
     if (!currentUser?.uid) return;
-    const userId = currentUser.uid;
-    const { summaryRef, stateRef } = getPointsRefsForUser(userId);
-
     try {
-        await db.runTransaction(async (tx) => {
-            const [sSnap, stSnap] = await Promise.all([tx.get(summaryRef), tx.get(stateRef)]);
-            const nowIso = new Date().toISOString();
-
-            if (!sSnap.exists) {
-                tx.set(summaryRef, {
-                    userId,
-                    userNickname: currentUser.name || '',
-                    balance: 0,
-                    lifetimeEarned: 0,
-                    updatedAt: nowIso
-                });
-            } else {
-                tx.set(summaryRef, { userNickname: currentUser.name || '', updatedAt: nowIso }, { merge: true });
-            }
-
-            if (!stSnap.exists) {
-                tx.set(stateRef, {
-                    userId,
-                    userNickname: currentUser.name || '',
-                    lastCheckinKstDate: null,
-                    currentStreakDays: 0,
-                    claimed3: false,
-                    claimed7: false,
-                    claimed14: false,
-                    totalDraws: 0,
-                    totalWins: 0,
-                    gachaPity: 0,
-                    gachaNextLuck: null,
-                    updatedAt: nowIso
-                });
-            } else {
-                tx.set(stateRef, { userNickname: currentUser.name || '', updatedAt: nowIso }, { merge: true });
-            }
-        });
+        await callFunction('pointsEnsureDocs', {});
     } catch (e) {
         console.error('포인트 초기화 실패:', e);
     }
@@ -236,13 +175,6 @@ function isGachaEventActive(cfg, nowUtc = new Date()) {
     return t >= start.getTime() && t <= end.getTime();
 }
 
-function getGachaBaseRate(cfg) {
-    const active = isGachaEventActive(cfg);
-    if (!active) return POINTS.BASE_RATE;
-    const mult = Number(cfg.multiplier) || 1;
-    return POINTS.BASE_RATE * Math.max(0, mult);
-}
-
 function getGachaCost(cfg) {
     const base = POINTS.COST_GACHA;
     const active = isGachaEventActive(cfg);
@@ -274,39 +206,19 @@ async function getGachaWinnersCountBySlots(roundNo, maxWinners) {
     }
 }
 
-function pickNextLuckTier() {
-    // 등장확률(요구사항 문구/UI 의미에 맞춰 정리)
-    // - 98%: 보상 없음(다음 뽑기 확률 변화 없음) → null
-    // - 1.5%: 다음 뽑기 한정 소폭 증가 → 'minor'
-    // - 0.5%: 다음 뽑기 한정 대폭 증가 → 'major'
-    const u = Math.random() * 100;
-    if (u < 0.5) return 'major';     // 0.5%
-    if (u < 2.0) return 'minor';     // 1.5%
-    return null;                    // 98%
-}
-
-function computeWinRateForDraw({ cfg, baseRate, nextLuckTier }) {
-    const eventActive = isGachaEventActive(cfg);
-
-    // 이벤트 중에는 "다음 1회 한정 당첨 확률"을 무조건 고정(요구사항)
-    if (eventActive) {
-        if (nextLuckTier === 'minor') return 0.02;  // 2%
-        if (nextLuckTier === 'major') return 0.035; // 3.5%
-        return baseRate; // 기본은 배수 적용
-    }
-
-    // 이벤트 없을 때: 기본 + 증가
-    if (nextLuckTier === 'minor') return baseRate + 0.01; // +1%
-    if (nextLuckTier === 'major') return baseRate + 0.03; // +3%
-    return baseRate;
-}
-
 function formatFirestoreError(e) {
     const code = e?.code ? String(e.code) : '';
     const msg = e?.message ? String(e.message) : String(e || '');
     // firebase compat 에러는 message에 "Missing or insufficient permissions." 같은 핵심이 들어감
     if (code && msg) return `${code}: ${msg}`;
     return msg || code || 'unknown error';
+}
+
+async function callFunction(name, data = {}) {
+    if (!functions) throw new Error('Functions 초기화가 필요합니다.');
+    const fn = functions.httpsCallable(name);
+    const res = await fn(data);
+    return res?.data;
 }
 
 function addDaysToDateKey(dateKey, deltaDays) {
@@ -520,140 +432,8 @@ async function doAttendanceCheck(opts = {}) {
     if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
     const silent = !!opts.silent;
-
-    const userId = currentUser.uid;
-
-    const kstDate = getKstDateKeyFromNow();
-    const weekKey = getIsoWeekKeyFromKstNow();
-    const nowIso = new Date().toISOString();
-
-    const { summaryRef, stateRef, ledgerCol } = getPointsRefsForUser(userId);
-    const ledgerRef = ledgerCol.doc(`EARN_ATTENDANCE__${kstDate}`);
-    const dailyRef = db.collection(FIRESTORE_POINTS.counters).doc(`D__${userId}__ATTENDANCE__${kstDate}`);
-    const weeklyRef = db.collection(FIRESTORE_POINTS.counters).doc(`W__${userId}__ATTENDANCE__${weekKey}`);
-
-    const yesterday = addDaysToDateKey(kstDate, -1);
-
     try {
-        const result = await db.runTransaction(async (tx) => {
-            const [ledgerSnap, dSnap, wSnap, sSnap, stSnap] = await Promise.all([
-                tx.get(ledgerRef),
-                tx.get(dailyRef),
-                tx.get(weeklyRef),
-                tx.get(summaryRef),
-                tx.get(stateRef)
-            ]);
-
-            if (ledgerSnap.exists) return { ok: false, code: 'already' };
-
-            const dailyCount = Number(dSnap.exists ? dSnap.data()?.count : 0) || 0;
-            const weeklyCount = Number(wSnap.exists ? wSnap.data()?.count : 0) || 0;
-            if (dailyCount >= POINTS.LIMITS.ATTENDANCE.daily) return { ok: false, code: 'daily_limit' };
-            if (weeklyCount >= POINTS.LIMITS.ATTENDANCE.weekly) return { ok: false, code: 'weekly_limit' };
-
-            const sum = sSnap.exists ? sSnap.data() : {};
-            const curBalance = Number(sum?.balance) || 0;
-            const curLifetime = Number(sum?.lifetimeEarned) || 0;
-
-            // 출석 10pt 지급
-            tx.set(ledgerRef, {
-                userId,
-                userNickname: currentUser.name,
-                type: 'EARN_ATTENDANCE',
-                delta: POINTS.EARN.ATTENDANCE,
-                refType: 'attendance',
-                refId: kstDate,
-                reasonText: null,
-                createdAt: nowIso,
-                kstDate,
-                kstWeekKey: weekKey
-            });
-
-            tx.set(dailyRef, { userId, action: 'ATTENDANCE', scope: 'D', key: kstDate, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
-            tx.set(weeklyRef, { userId, action: 'ATTENDANCE', scope: 'W', key: weekKey, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
-
-            tx.set(summaryRef, {
-                userId,
-                userNickname: currentUser.name,
-                balance: curBalance + POINTS.EARN.ATTENDANCE,
-                lifetimeEarned: curLifetime + POINTS.EARN.ATTENDANCE,
-                updatedAt: nowIso
-            }, { merge: true });
-
-            // 연속 출석 상태 갱신 + 보너스
-            const st = stSnap.exists ? stSnap.data() : {};
-            const last = st?.lastCheckinKstDate || null;
-            let streakDays = Number(st?.currentStreakDays) || 0;
-            let claimed3 = !!st?.claimed3;
-            let claimed7 = !!st?.claimed7;
-            let claimed14 = !!st?.claimed14;
-
-            if (last === yesterday) {
-                streakDays += 1;
-            } else {
-                streakDays = 1;
-                claimed3 = false;
-                claimed7 = false;
-                claimed14 = false;
-            }
-
-            let bonusTotal = 0;
-
-            const tryBonus = async (milestone, delta, claimedKey) => {
-                if (streakDays < milestone) return;
-                if (claimedKey === 'claimed3' && claimed3) return;
-                if (claimedKey === 'claimed7' && claimed7) return;
-                if (claimedKey === 'claimed14' && claimed14) return;
-
-                const bonusRef = ledgerCol.doc(`EARN_STREAK_${milestone}__${kstDate}`);
-                const bonusSnap = await tx.get(bonusRef);
-                if (bonusSnap.exists) return;
-
-                tx.set(bonusRef, {
-                    userId,
-                    userNickname: currentUser.name,
-                    type: `EARN_STREAK_${milestone}`,
-                    delta,
-                    refType: 'attendance_streak',
-                    refId: String(milestone),
-                    reasonText: null,
-                    createdAt: nowIso,
-                    kstDate,
-                    kstWeekKey: weekKey
-                });
-
-                bonusTotal += delta;
-                if (claimedKey === 'claimed3') claimed3 = true;
-                if (claimedKey === 'claimed7') claimed7 = true;
-                if (claimedKey === 'claimed14') claimed14 = true;
-            };
-
-            await tryBonus(3, POINTS.EARN.STREAK_3, 'claimed3');
-            await tryBonus(7, POINTS.EARN.STREAK_7, 'claimed7');
-            await tryBonus(14, POINTS.EARN.STREAK_14, 'claimed14');
-
-            if (bonusTotal > 0) {
-                tx.set(summaryRef, {
-                    balance: curBalance + POINTS.EARN.ATTENDANCE + bonusTotal,
-                    lifetimeEarned: curLifetime + POINTS.EARN.ATTENDANCE + bonusTotal,
-                    updatedAt: nowIso
-                }, { merge: true });
-            }
-
-            tx.set(stateRef, {
-                userId,
-                userNickname: currentUser.name,
-                lastCheckinKstDate: kstDate,
-                currentStreakDays: streakDays,
-                claimed3,
-                claimed7,
-                claimed14,
-                updatedAt: nowIso
-            }, { merge: true });
-
-            return { ok: true, streakDays, bonusTotal };
-        });
-
+        const result = await callFunction('pointsAttendance', {});
         if (!result?.ok) {
             if (silent) return;
             if (result.code === 'already') return showToast(`<i class="fa-solid fa-circle-info"></i> 오늘은 이미 출석 체크를 했습니다.`);
@@ -675,72 +455,8 @@ async function awardPostCreatePoints(postType, postId) {
     if (!db || !currentUser?.uid) return;
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return;
     if (!postId) return;
-
-    const userId = currentUser.uid;
-
-    const kstDate = getKstDateKeyFromNow();
-    const weekKey = getIsoWeekKeyFromKstNow();
-    const nowIso = new Date().toISOString();
-
-    const isParty = postType === 'party';   // 파티원 구해요
-    const isMember = postType === 'member'; // 파티 구해요
-    if (!isParty && !isMember) return;
-
-    const actionKey = isParty ? 'POST_PARTY' : 'POST_MEMBER';
-    const limits = isParty ? POINTS.LIMITS.POST_PARTY : POINTS.LIMITS.POST_MEMBER;
-    const type = isParty ? 'EARN_POST_PARTY' : 'EARN_POST_MEMBER';
-
-    const { summaryRef, ledgerCol } = getPointsRefsForUser(userId);
-    const ledgerRef = ledgerCol.doc(`${type}__${postId}`);
-    const dailyRef = db.collection(FIRESTORE_POINTS.counters).doc(`D__${userId}__${actionKey}__${kstDate}`);
-    const weeklyRef = db.collection(FIRESTORE_POINTS.counters).doc(`W__${userId}__${actionKey}__${weekKey}`);
-
     try {
-        const res = await db.runTransaction(async (tx) => {
-            const [lSnap, dSnap, wSnap, sSnap] = await Promise.all([
-                tx.get(ledgerRef),
-                tx.get(dailyRef),
-                tx.get(weeklyRef),
-                tx.get(summaryRef)
-            ]);
-
-            if (lSnap.exists) return { ok: false, code: 'already' };
-            const dailyCount = Number(dSnap.exists ? dSnap.data()?.count : 0) || 0;
-            const weeklyCount = Number(wSnap.exists ? wSnap.data()?.count : 0) || 0;
-            if (dailyCount >= limits.daily) return { ok: false, code: 'daily_limit' };
-            if (weeklyCount >= limits.weekly) return { ok: false, code: 'weekly_limit' };
-
-            const sum = sSnap.exists ? sSnap.data() : {};
-            const curBalance = Number(sum?.balance) || 0;
-            const curLifetime = Number(sum?.lifetimeEarned) || 0;
-
-            tx.set(ledgerRef, {
-                userId,
-                userNickname: currentUser.name,
-                type,
-                delta: POINTS.EARN.POST,
-                refType: 'post',
-                refId: String(postId),
-                reasonText: null,
-                createdAt: nowIso,
-                kstDate,
-                kstWeekKey: weekKey
-            });
-
-            tx.set(dailyRef, { userId, action: actionKey, scope: 'D', key: kstDate, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
-            tx.set(weeklyRef, { userId, action: actionKey, scope: 'W', key: weekKey, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
-
-            tx.set(summaryRef, {
-                userId,
-                userNickname: currentUser.name,
-                balance: curBalance + POINTS.EARN.POST,
-                lifetimeEarned: curLifetime + POINTS.EARN.POST,
-                updatedAt: nowIso
-            }, { merge: true });
-
-            return { ok: true };
-        });
-
+        const res = await callFunction('pointsPostAward', { postType, postId: String(postId) });
         if (res?.ok) {
             showToast(`<i class="fa-solid fa-coins"></i> 포인트 +${POINTS.EARN.POST}pt (글 작성)`);
             await refreshPointsHeader();
@@ -826,13 +542,7 @@ async function doGachaDraw() {
     if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
 
-    const userId = currentUser.uid;
-
-    const kstDate = getKstDateKeyFromNow();
-    const weekKey = getIsoWeekKeyFromKstNow();
-    const nowIso = new Date().toISOString();
     const cfg = await loadGachaEventConfig(false);
-    const baseRate = getGachaBaseRate(cfg);
     const cost = getGachaCost(cfg);
     const ctrl = getGachaControl(cfg);
 
@@ -842,14 +552,6 @@ async function doGachaDraw() {
     if (!ctrl.roundNo || !ctrl.maxWinners) {
         return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기 회차/당첨 인원 설정이 필요합니다.`);
     }
-    if (ctrl.winnersCount >= ctrl.maxWinners) {
-        return showToast(`<i class="fa-solid fa-circle-info"></i> 이번 회차 뽑기가 종료되었습니다.`);
-    }
-
-    const { summaryRef, stateRef, ledgerCol, drawsCol } = getPointsRefsForUser(userId);
-    const drawId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const spendLedgerRef = ledgerCol.doc(`SPEND_GACHA__${drawId}`);
-    const drawRef = drawsCol.doc(drawId);
 
     // 연출 시작(결과 확정 전까지 “뽑는중” 표시)
     const showRolling = () => {
@@ -881,140 +583,8 @@ async function doGachaDraw() {
     }
 
     try {
-        const txPromise = db.runTransaction(async (tx) => {
-            const cfgRef = db.collection(FIRESTORE_POINTS.gachaEvent).doc('current');
-            const roundRef = db.collection(FIRESTORE_POINTS.gachaRounds).doc(String(ctrl.roundNo));
-            const winnerRef = roundRef.collection('winners').doc(userId);
-            const slotRefs = Array.from({ length: ctrl.maxWinners }, (_, i) => roundRef.collection('slots').doc(String(i + 1)));
-
-            const [sSnap, stSnap, spendSnap, cfgSnap, winnerSnap, ...slotSnaps] = await Promise.all([
-                tx.get(summaryRef),
-                tx.get(stateRef),
-                tx.get(spendLedgerRef),
-                tx.get(cfgRef),
-                tx.get(winnerRef),
-                ...slotRefs.map(r => tx.get(r))
-            ]);
-            if (spendSnap.exists) return { ok: false, code: 'already' };
-            if (winnerSnap.exists) return { ok: false, code: 'already_winner' };
-
-            const cfgNow = cfgSnap.exists ? (cfgSnap.data() || {}) : {};
-            const ctrlNow = getGachaControl(cfgNow);
-            if (!ctrlNow.gachaEnabled) return { ok: false, code: 'gacha_disabled' };
-            if (!ctrlNow.roundNo || !ctrlNow.maxWinners) return { ok: false, code: 'gacha_unconfigured' };
-            if (ctrlNow.roundNo !== ctrl.roundNo) return { ok: false, code: 'round_changed' };
-
-            const winnersCountNow = slotSnaps.filter(s => s.exists).length;
-            if (winnersCountNow >= ctrlNow.maxWinners) return { ok: false, code: 'round_ended' };
-            const alreadyWinnerBySlot = slotSnaps.some(s => s.exists && (s.data()?.uid === userId));
-            if (alreadyWinnerBySlot) return { ok: false, code: 'already_winner' };
-
-            const sum = sSnap.exists ? sSnap.data() : {};
-            const balance = Number(sum?.balance) || 0;
-            if (balance < cost) return { ok: false, code: 'insufficient', need: cost };
-
-            const st = stSnap.exists ? stSnap.data() : {};
-            const beforeDraws = Number(st?.totalDraws) || 0;
-            const nextLuckTier = st?.gachaNextLuck || null; // 이전 꽝에서 얻은 "다음 1회 한정" 행운
-            const winRate = computeWinRateForDraw({ cfg, baseRate, nextLuckTier });
-
-            const u = new Uint32Array(1);
-            crypto.getRandomValues(u);
-            const roll = u[0] % 1000000; // 0..999999
-            const winThreshold = Math.floor(winRate * 1000000);
-            const isWin = roll < winThreshold;
-
-            // 이번 뽑기에서 nextLuckTier는 소비됨(1회 한정)
-            let nextLuckForNextDraw = null;
-            let loseLuckOutcome = null;
-            if (!isWin) {
-                loseLuckOutcome = pickNextLuckTier();
-                nextLuckForNextDraw = loseLuckOutcome; // null | 'minor' | 'major'
-            }
-
-            // 결제 원장
-            tx.set(spendLedgerRef, {
-                userId,
-                userNickname: currentUser.name,
-                type: 'SPEND_GACHA',
-                delta: -cost,
-                refType: 'gacha_draw',
-                refId: drawId,
-                reasonText: null,
-                createdAt: nowIso,
-                kstDate,
-                kstWeekKey: weekKey
-            });
-
-            // 뽑기 결과 기록
-            tx.set(drawRef, {
-                userId,
-                userNickname: currentUser.name,
-                createdAt: nowIso,
-                kstDate,
-                costPoints: cost,
-                baseRate: baseRate,
-                winRateApplied: winRate,
-                nextLuckUsed: nextLuckTier,
-                userTotalDrawsBefore: beforeDraws,
-                rngRoll: roll,
-                isWin,
-                loseLuckOutcome: loseLuckOutcome
-            });
-
-            // 당첨자 기록(슬롯 점유로 당첨 인원 제한)
-            if (isWin) {
-                const firstEmptyIdx = slotSnaps.findIndex(s => !s.exists);
-                if (firstEmptyIdx < 0) return { ok: false, code: 'round_ended' };
-                const slotRef = slotRefs[firstEmptyIdx];
-
-                tx.set(slotRef, {
-                    uid: userId,
-                    nickname: currentUser.name || '',
-                    wonAt: nowIso,
-                    drawId: drawId,
-                    roundNo: ctrlNow.roundNo,
-                    slotNo: firstEmptyIdx + 1
-                });
-                tx.set(winnerRef, {
-                    uid: userId,
-                    nickname: currentUser.name || '',
-                    wonAt: nowIso,
-                    drawId: drawId,
-                    roundNo: ctrlNow.roundNo
-                });
-            }
-
-            // 요약 갱신 (누적 획득은 증가하지 않음)
-            tx.set(summaryRef, {
-                userId,
-                userNickname: currentUser.name,
-                balance: balance - cost,
-                updatedAt: nowIso
-            }, { merge: true });
-
-            tx.set(stateRef, {
-                userId,
-                userNickname: currentUser.name,
-                totalDraws: beforeDraws + 1,
-                totalWins: (Number(st?.totalWins) || 0) + (isWin ? 1 : 0),
-                gachaPity: 0, // (요구) 누적 증가 삭제 → 더 이상 사용하지 않음
-                gachaNextLuck: nextLuckForNextDraw,
-                updatedAt: nowIso
-            }, { merge: true });
-
-            return {
-                ok: true,
-                isWin,
-                roll,
-                usedNextLuck: nextLuckTier,
-                newNextLuck: nextLuckForNextDraw,
-                eventActive: isGachaEventActive(cfg)
-            };
-        });
-
         // 최소 연출 시간 확보(체감용)
-        const [result] = await Promise.all([txPromise, sleep(1400)]);
+        const [result] = await Promise.all([callFunction('gachaDraw', {}), sleep(1400)]);
         if (rollingTimer) clearInterval(rollingTimer);
         hideRolling();
 
@@ -1022,6 +592,7 @@ async function doGachaDraw() {
             if (result.code === 'insufficient') return showToast(`<i class="fa-solid fa-circle-info"></i> 포인트가 부족합니다. (필요 ${fmtInt(result.need || cost)}pt)`);
             if (result.code === 'already_winner') return showToast(`<i class="fa-solid fa-circle-info"></i> 이번 회차에서 이미 당첨되어 더 이상 뽑을 수 없습니다.`);
             if (result.code === 'gacha_disabled') return showToast(`<i class="fa-solid fa-circle-info"></i> 현재 뽑기가 비활성화되어 있습니다.`);
+            if (result.code === 'gacha_unconfigured') return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기 회차/당첨 인원 설정이 필요합니다.`);
             if (result.code === 'round_ended') return showToast(`<i class="fa-solid fa-circle-info"></i> 이번 회차 뽑기가 종료되었습니다.`);
             if (result.code === 'round_changed') return showToast(`<i class="fa-solid fa-circle-info"></i> 회차 정보가 갱신되었습니다. 새로고침 후 다시 시도해주세요.`);
             return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기에 실패했습니다.`);
@@ -1059,12 +630,6 @@ async function doGachaDraw() {
         if (result.isWin) {
             showToast(`<i class="fa-solid fa-trophy"></i> 당첨! (확률 초기화)`);
             launchConfetti();
-            sendGachaWinToDiscord([
-                '🎉 **뽑기 당첨!**',
-                `- 닉네임: ${currentUser?.name || ''}`,
-                `- uid: ${currentUser?.uid || ''}`,
-                `- 시각(KST): ${formatKst(new Date().toISOString()) || ''}`
-            ].join('\n'));
         } else {
             showToast(`<i class="fa-solid fa-dice"></i> 뽑기 완료`);
         }
@@ -1459,100 +1024,15 @@ async function rootBulkAdjustAllUsers() {
     const ok = confirm(`전체 유저에게 ${delta >= 0 ? '+' : ''}${delta}pt를 일괄 적용할까요?\n\n- 대상: ${target}\n- 사유: ${reason}\n\n※ 되돌리기 어렵습니다.`);
     if (!ok) return;
 
-    const bulkId = `bulk_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const nowIso = new Date().toISOString();
-
-    let processed = 0;
-    let skipped = 0;
-    let lastDoc = null;
-
     const status = (msg) => {
         if (elements.rootBulkStatusText) elements.rootBulkStatusText.textContent = msg;
     };
     status('진행중...');
 
     try {
-        while (true) {
-            let q = db.collection(FIRESTORE_POINTS.userProfiles).orderBy('createdAt', 'asc').limit(150);
-            if (lastDoc) q = q.startAfter(lastDoc);
-            const snap = await q.get();
-            if (snap.empty) break;
-
-            const docs = snap.docs;
-            lastDoc = docs[docs.length - 1];
-
-            for (const d of docs) {
-                const p = d.data() || {};
-                const uid = p.uid || d.id;
-                if (!uid) { skipped++; continue; }
-
-                if (target === 'approved_only' && p.pointsApproved !== true) {
-                    skipped++;
-                    continue;
-                }
-
-                const { summaryRef, ledgerCol } = getPointsRefsForUser(uid);
-                const ledgerRef = ledgerCol.doc(`ROOT_BULK_ADJUST__${bulkId}`);
-
-                await db.runTransaction(async (tx) => {
-                    const [lSnap, sSnap] = await Promise.all([tx.get(ledgerRef), tx.get(summaryRef)]);
-                    if (lSnap.exists) return;
-
-                    const sum = sSnap.exists ? (sSnap.data() || {}) : {};
-                    const balance = Number(sum.balance) || 0;
-                    const lifetime = Number(sum.lifetimeEarned) || 0;
-                    const nextBalance = balance + delta;
-                    const nextLifetime = Math.max(0, lifetime + delta); // 요구: 회수도 누적에 반영(차감)
-
-                    tx.set(ledgerRef, {
-                        userId: uid,
-                        userNickname: String(p.nickname || ''),
-                        type: 'ROOT_BULK_ADJUST',
-                        delta,
-                        refType: 'root_bulk',
-                        refId: bulkId,
-                        reasonText: reason,
-                        adminNickname: currentUser.name || 'ROOT',
-                        adminUserId: currentUser.uid,
-                        createdAt: nowIso,
-                        kstDate: getKstDateKeyFromNow(),
-                        kstWeekKey: getIsoWeekKeyFromKstNow()
-                    });
-
-                    tx.set(summaryRef, {
-                        userId: uid,
-                        userNickname: String(p.nickname || ''),
-                        balance: nextBalance,
-                        lifetimeEarned: nextLifetime,
-                        updatedAt: nowIso
-                    }, { merge: true });
-                });
-
-                processed++;
-                if (processed % 10 === 0) status(`진행중... 처리 ${processed}명 / 제외 ${skipped}명`);
-            }
-        }
-
-        // 공개 로그에도 기록(포인트 로그 탭)
-        try {
-            const publicRef = db.collection(FIRESTORE_POINTS.publicAdminLog).doc(bulkId);
-            await publicRef.set({
-                type: 'ROOT_BULK_ADJUST',
-                delta,
-                reasonText: reason,
-                adminNickname: currentUser.name || 'ROOT',
-                adminId: currentUser.uid,
-                targetNickname: target === 'approved_only' ? '전체(승인된 계정)' : '전체(모든 계정)',
-                targetUserId: null,
-                processedCount: processed,
-                skippedCount: skipped,
-                createdAt: nowIso,
-                kstDate: getKstDateKeyFromNow()
-            }, { merge: true });
-        } catch (e) {
-            console.warn('public log write failed:', e);
-        }
-
+        const res = await callFunction('rootBulkAdjustAllUsers', { mode, amount: amt, reason, target });
+        const processed = Number(res?.processed || 0);
+        const skipped = Number(res?.skipped || 0);
         status(`완료: 처리 ${processed}명 / 제외 ${skipped}명`);
         showToast(`<i class="fa-solid fa-bolt"></i> 일괄 적용 완료: ${processed}명`);
     } catch (e) {
@@ -1570,35 +1050,8 @@ window.approvePointsForUser = async function(uid) {
     const ok = confirm(`이 유저의 포인트 기능을 승인할까요?\n\nuid: ${uid}`);
     if (!ok) return;
 
-    const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(uid);
-    const now = firebase.firestore.FieldValue.serverTimestamp();
-
     try {
-        await db.runTransaction(async (tx) => {
-            // 트랜잭션 규칙: 모든 read를 먼저 수행해야 함
-            const { summaryRef, stateRef } = getPointsRefsForUser(uid);
-            const [pSnap, sSnap, stSnap] = await Promise.all([
-                tx.get(profileRef),
-                tx.get(summaryRef),
-                tx.get(stateRef)
-            ]);
-            if (!pSnap.exists) throw new Error('프로필이 없습니다.');
-            const p = pSnap.data() || {};
-            if (p.pointsApproved === true) return;
-
-            tx.set(profileRef, { pointsApproved: true, approvedAt: now, approvedBy: currentUser.uid }, { merge: true });
-
-            // 승인과 동시에 포인트 문서도 초기화(요약/상태)
-            const nowIso = new Date().toISOString();
-            const nick = String(p.nickname || '').trim();
-
-            if (!sSnap.exists) {
-                tx.set(summaryRef, { userId: uid, userNickname: nick, balance: 0, lifetimeEarned: 0, updatedAt: nowIso });
-            }
-            if (!stSnap.exists) {
-                tx.set(stateRef, { userId: uid, userNickname: nick, lastCheckinKstDate: null, currentStreakDays: 0, claimed3: false, claimed7: false, claimed14: false, totalDraws: 0, totalWins: 0, gachaPity: 0, updatedAt: nowIso });
-            }
-        });
+        await callFunction('pointsApproveUser', { uid: String(uid) });
 
         showToast(`<i class="fa-solid fa-check"></i> 승인 완료`);
         await Promise.all([loadPendingApprovals(), loadPointsPublicAdminLog()]);
@@ -1620,71 +1073,8 @@ async function adminAdjustPoints() {
     if (!Number.isFinite(delta) || delta === 0) return alert('포인트 변경값을 입력하세요. (0 제외)');
     if (!reason) return alert('사유를 입력하세요. (필수)');
 
-    const nk = nicknameKey(targetNick);
-    if (!nk) return alert('닉네임 형식을 확인해 주세요.');
-
-    const nickRef = db.collection(FIRESTORE_POINTS.nicknameIndex).doc(nk);
-    const nickSnap = await nickRef.get().catch(() => null);
-    const targetUserId = nickSnap?.exists ? (nickSnap.data()?.uid || null) : null;
-    if (!targetUserId) return alert('대상 유저를 찾을 수 없습니다.');
-
-    const logId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const nowIso = new Date().toISOString();
-    const kstDate = getKstDateKeyFromNow();
-    const weekKey = getIsoWeekKeyFromKstNow();
-
-    const targetSummaryRef = db.collection(FIRESTORE_POINTS.summary).doc(targetUserId);
-    const targetLedgerCol = db.collection(FIRESTORE_POINTS.ledgerUsers).doc(targetUserId).collection('items');
-    const targetLedgerRef = targetLedgerCol.doc(`ADMIN_ADJUST__${logId}`);
-    const publicRef = db.collection(FIRESTORE_POINTS.publicAdminLog).doc(logId);
-
     try {
-        await db.runTransaction(async (tx) => {
-            const [sSnap, lSnap, pSnap] = await Promise.all([tx.get(targetSummaryRef), tx.get(targetLedgerRef), tx.get(publicRef)]);
-            if (lSnap.exists || pSnap.exists) return;
-
-            const sum = sSnap.exists ? sSnap.data() : {};
-            const balance = Number(sum?.balance) || 0;
-            const lifetime = Number(sum?.lifetimeEarned) || 0;
-            // 관리자 회수도 "누적 획득"에서 차감 처리(요구사항)
-            // 단, 뽑기/일반 소모는 lifetimeEarned에 영향을 주지 않음(ADMIN_ADJUST만 여기서 처리)
-            const nextLifetime = Math.max(0, lifetime + delta);
-
-            tx.set(targetLedgerRef, {
-                userId: targetUserId,
-                userNickname: targetNick,
-                type: 'ADMIN_ADJUST',
-                delta,
-                refType: 'admin_adjust',
-                refId: logId,
-                reasonText: reason,
-                adminNickname: currentUser.name,
-                adminUserId: currentUser.uid,
-                createdAt: nowIso,
-                kstDate,
-                kstWeekKey: weekKey
-            });
-
-            tx.set(publicRef, {
-                type: 'ADMIN_ADJUST',
-                delta,
-                reasonText: reason,
-                adminNickname: currentUser.name,
-                adminId: currentUser.uid,
-                targetNickname: targetNick,
-                targetUserId,
-                createdAt: nowIso,
-                kstDate
-            });
-
-            tx.set(targetSummaryRef, {
-                userId: targetUserId,
-                userNickname: targetNick,
-                balance: balance + delta,
-                lifetimeEarned: nextLifetime,
-                updatedAt: nowIso
-            }, { merge: true });
-        });
+        await callFunction('adminAdjustPoints', { targetNickname: targetNick, delta, reason });
 
         showToast(`<i class="fa-solid fa-gavel"></i> 관리자 조정 완료 (${delta >= 0 ? '+' : ''}${fmtInt(delta)}pt)`);
         elements.adminAdjustReason.value = '';
@@ -1708,10 +1098,12 @@ const firebaseConfig = {
 
 let db;
 let auth;
+let functions;
 try {
     firebase.initializeApp(firebaseConfig);
     db = firebase.firestore();
     auth = firebase.auth();
+    functions = firebase.functions();
 } catch (e) {
     console.error("Firebase 초기화 실패.", e);
 }
@@ -1766,26 +1158,6 @@ async function sendLogToDiscord(lines) {
         });
     } catch (e) {
         console.error("로그 웹훅 전송 실패:", e);
-    }
-}
-
-async function sendGachaWinToDiscord(payload) {
-    const url = getGachaWinWebhookUrl();
-    if (!url) {
-        // 웹훅 미설정이면 조용히 스킵(필요시 콘솔에만 힌트)
-        console.warn('[gacha] win webhook not configured. set localStorage:', GACHA_WIN_WEBHOOK_STORAGE_KEY);
-        return;
-    }
-    try {
-        const content = String(payload || '').trim();
-        if (!content) return;
-        await fetch(`${url}?wait=false`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content })
-        });
-    } catch (e) {
-        console.error("뽑기 당첨 웹훅 전송 실패:", e);
     }
 }
 
