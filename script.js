@@ -800,6 +800,19 @@ async function refreshGachaPanel(opts = {}) {
             elements.gachaDrawBtn.disabled = !can;
         }
 
+        // 비활성 상태 안내
+        if (elements.gachaResult) {
+            if (!ctrl.gachaEnabled) {
+                elements.gachaResult.classList.remove('hidden');
+                elements.gachaResult.textContent = '현재 뽑기가 중단되었습니다. (ROOT 설정에서 재활성화 필요)';
+                elements.gachaResult.style.borderColor = 'rgba(239,68,68,0.55)';
+                elements.gachaResult.style.background = 'rgba(239,68,68,0.08)';
+            } else if (elements.gachaResult.textContent.includes('중단되었습니다')) {
+                elements.gachaResult.classList.add('hidden');
+                elements.gachaResult.textContent = '';
+            }
+        }
+
         await loadGachaWinnersList(ctrl.roundNo);
 
         if (opts.showToastOnDone) showToast(`<i class="fa-solid fa-rotate"></i> 뽑기 정보를 갱신했습니다.`);
@@ -2696,6 +2709,80 @@ function avatarUrlFromCharKeyOrFallback(charKey, fallbackUrl, nameForFallback = 
     return safeAvatarUrl(fallbackUrl, nameForFallback);
 }
 
+function extractCharKey(obj) {
+    if (!obj) return null;
+    const candidates = [
+        obj.charKey,
+        obj.characterKey,
+        obj.characterKeyNo,
+        obj.characterId,
+        obj.id
+    ];
+    for (const v of candidates) {
+        const s = String(v || '').trim();
+        if (!s) continue;
+        if (/^\d+$/.test(s)) return s;
+    }
+    return null;
+}
+
+function aon2KeyFromTimestamp(timestamp) {
+    const ts = String(timestamp || '');
+    if (ts.length < 16) return ts.padEnd(16, '0');
+    if (ts.length > 16) return ts.slice(0, 16);
+    return ts;
+}
+
+function base64ToBytes(b64) {
+    let s = String(b64 || '').trim();
+    if (!s) return new Uint8Array();
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = s.length % 4;
+    if (pad) s += '='.repeat(4 - pad);
+    const binary = atob(s);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+
+function pkcs7Unpad(bytes) {
+    if (!bytes || !bytes.length) return bytes;
+    const pad = bytes[bytes.length - 1];
+    if (!pad || pad > 16) return bytes;
+    return bytes.slice(0, bytes.length - pad);
+}
+
+async function decryptAon2InfoPayload(dataB64, timestamp) {
+    const keyStr = aon2KeyFromTimestamp(timestamp);
+    const keyBytes = new TextEncoder().encode(keyStr);
+    const ivBytes = new TextEncoder().encode(keyStr.slice(0, 16));
+    const ct = base64ToBytes(dataB64);
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        keyBytes,
+        { name: 'AES-CBC' },
+        false,
+        ['decrypt']
+    );
+    const padded = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, cryptoKey, ct));
+    const plainBytes = pkcs7Unpad(padded);
+    return new TextDecoder().decode(plainBytes);
+}
+
+async function decodeAon2PayloadIfNeeded(jsonObj) {
+    if (!jsonObj) return null;
+    if (typeof jsonObj?.data === 'string' && jsonObj?.timestamp) {
+        try {
+            const plain = await decryptAon2InfoPayload(jsonObj.data, jsonObj.timestamp);
+            return JSON.parse(plain);
+        } catch (e) {
+            lastCharacterFetchError = `복호화 실패: ${e?.message || String(e)}`;
+            return null;
+        }
+    }
+    return jsonObj;
+}
+
 // =========================
 // Admin Tools (Audit / Backup)
 // =========================
@@ -4130,7 +4217,7 @@ async function refreshCurrentUserCharacter() {
             level: data.level,
             itemLevel: data.item_level,
             avatar: data.profile_img,
-            charKey: data.charId || null,
+            charKey: data.charKey || null,
             verified: true,
             dps: keepDps
         };
@@ -4685,18 +4772,27 @@ async function fetchCharacterData(nickname) {
             }
             return null;
         }
-        
+
+        const searchPayload = await decodeAon2PayloadIfNeeded(searchJson);
+        if (!searchPayload) return null;
+
+        const searchDataNode = searchPayload?.data ?? searchPayload;
+
         // 응답 형태 호환:
         // 1) { data: { character: {...} } }
         // 2) { data: [ {...}, {...} ] }  (← 현재 사용자 로그: data 키가 0..9 로 보이는 케이스)
         // 3) { data: { characters: [...] } }
-        const dataNode = searchJson?.data;
-        const listFromDataArray = Array.isArray(dataNode) ? dataNode : null;
+        const dataNode = searchDataNode;
+        const listFromDataArray = Array.isArray(dataNode)
+            ? dataNode
+            : (dataNode && typeof dataNode === 'object' && !Array.isArray(dataNode)
+                ? Object.values(dataNode)
+                : null);
         const listFromCharacters = Array.isArray(dataNode?.characters) ? dataNode.characters : null;
 
         let character =
             dataNode?.character ||
-            searchJson?.character ||
+            searchPayload?.character ||
             (listFromCharacters ? listFromCharacters[0] : null) ||
             null;
 
@@ -4714,12 +4810,13 @@ async function fetchCharacterData(nickname) {
         }
 
         // characterId/charKey 호환
+        const charKey = extractCharKey(character);
         const charId =
-            character.characterId || character.charKey || character.charId ||
+            character.characterId || character.charId ||
             character.id || character.character_id ||
             character?.character?.characterId ||
             null;
-        if (!charId) return null;
+        if (!charId && !charKey) return null;
         const detailUrl = `${PROXY_URL}https://api.aon2.info/api/v1/aion2/characters/detail?serverId=2002&characterId=${encodeURIComponent(charId)}`;
         const detailRes = await fetch(detailUrl);
         if (!detailRes.ok) {
@@ -4727,11 +4824,12 @@ async function fetchCharacterData(nickname) {
             console.warn('character detail failed:', detailRes.status, txt.slice(0, 200));
             throw new Error(`detail http ${detailRes.status}`);
         }
-        const detailJson = await detailRes.json().catch(() => null);
+        let detailJson = await detailRes.json().catch(() => null);
+        const detailPayload = await decodeAon2PayloadIfNeeded(detailJson);
+        if (!detailPayload) return null;
 
-        if (!detailJson.data) return null;
-        
-        const data = detailJson.data;
+        const data = detailPayload?.data ?? detailPayload;
+        if (!data) return null;
 
         // DPS(전투력) 우선순위 로직 수정
         let dps = 0;
@@ -4759,6 +4857,7 @@ async function fetchCharacterData(nickname) {
             profile_img: data.profileImageUrl,
             server: '지켈',
             charId: charId,
+            charKey: charKey,
             aonScore: data.aonScore || 0,
             combatScore: data.combatScore || 0,
             calcStats: calcStats
