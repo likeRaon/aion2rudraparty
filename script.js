@@ -1715,6 +1715,7 @@ let lastSimulatedScore = null; // 시뮬레이터 직전 계산값(변화량 표
 let lastSnapshotById = new Map(); // 하드 삭제 감지용(이전 스냅샷 캐시)
 let lastCharacterFetchError = null;
 let autoAttendanceRanThisSession = false;
+let autoCharacterRefreshRanThisSession = false;
 
 function getSessionId() {
     let sid = sessionStorage.getItem('rudra_session_id');
@@ -3454,6 +3455,17 @@ async function initAuth() {
             } catch (e) {
                 console.warn('auto attendance failed:', e);
             }
+
+            // 인게임 아바타(charKey) 확보용: 로그인 후 1회 캐릭터 조회
+            try {
+                if (!autoCharacterRefreshRanThisSession && currentUser?.name) {
+                    autoCharacterRefreshRanThisSession = true;
+                    await refreshCurrentUserCharacter();
+                    updateUserUI();
+                }
+            } catch (e) {
+                console.warn('auto character refresh failed:', e);
+            }
         } catch (e) {
             console.error(e);
             alert('로그인 상태를 불러오는 중 오류가 발생했습니다.\n\n' + formatFirestoreError(e));
@@ -4554,6 +4566,7 @@ async function addPartyMember() {
             isLeader: false,
             dps: 0, 
             itemLevel: charData ? charData.item_level : 0,
+            charKey: charData ? (charData.charId || null) : null,
             avatar: charData ? charData.profile_img : null 
         };
 
@@ -4673,11 +4686,25 @@ async function fetchCharacterData(nickname) {
             return null;
         }
         
-        const character =
-            searchJson?.data?.character ||
+        // 응답 형태 호환:
+        // 1) { data: { character: {...} } }
+        // 2) { data: [ {...}, {...} ] }  (← 현재 사용자 로그: data 키가 0..9 로 보이는 케이스)
+        // 3) { data: { characters: [...] } }
+        const dataNode = searchJson?.data;
+        const listFromDataArray = Array.isArray(dataNode) ? dataNode : null;
+        const listFromCharacters = Array.isArray(dataNode?.characters) ? dataNode.characters : null;
+
+        let character =
+            dataNode?.character ||
             searchJson?.character ||
-            (Array.isArray(searchJson?.data?.characters) ? searchJson.data.characters[0] : null) ||
+            (listFromCharacters ? listFromCharacters[0] : null) ||
             null;
+
+        if (!character && listFromDataArray) {
+            const nk = String(nickname || '').trim().toLowerCase();
+            character = listFromDataArray.find(x => String(x?.characterName || x?.name || '').trim().toLowerCase() === nk) || listFromDataArray[0] || null;
+        }
+
         if (!character) {
             // ok(200)인데 구조가 달라졌을 때 사용자에게 힌트 제공
             const k1 = Object.keys(searchJson || {}).slice(0, 10).join(', ');
@@ -4686,7 +4713,12 @@ async function fetchCharacterData(nickname) {
             return null;
         }
 
-        const charId = character.characterId || character.id || character.character_id;
+        // characterId/charKey 호환
+        const charId =
+            character.characterId || character.charKey || character.charId ||
+            character.id || character.character_id ||
+            character?.character?.characterId ||
+            null;
         if (!charId) return null;
         const detailUrl = `${PROXY_URL}https://api.aon2.info/api/v1/aion2/characters/detail?serverId=2002&characterId=${encodeURIComponent(charId)}`;
         const detailRes = await fetch(detailUrl);
