@@ -4,11 +4,30 @@ const APP_VERSION = '2026-01-09.1';
 
 // 게시글 등록 알림(모집/구직)
 const POST_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU1OTI1NzA3ODk4ODgyMS81VDczT1VxWUxnZzFEYUs1Skk3M0R2OFpfYzdNVlBiajZXUkE0c3VyQ0paQ1ZXSW96T1Voel9rWDBhVEdiSkx3WkJLRg==';
-// 삭제 사유/오류 로그(감사용)
+// 삭제 사유/오류 로그(확인용)
 const LOG_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4MjU4OTQ1MDg2NjY4OS9QazduSFUtRmlubTJGQmo1cTk3UF85YU5hNzhZU3ZTOGRaY2M4OGdQaVFTZ285RXhqOXU4aDQ1UlNpQ291QTJiUUVVRQ==';
 
 const DISCORD_POST_WEBHOOK_URL = 'https://discord.com/api/webhooks/1456559257078988821/5T73OUqYLgg1DaK5JI73Dv8Z_c7MVPbj6WRA4surCJZCVWIozOUhz_kX0aTGbJLwZBKF';
 const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
+
+// 뽑기 당첨 알림
+const DISCORD_GACHA_WIN_WEBHOOK_URL = 'https://discord.com/api/webhooks/1461253087606866022/u1PYYFXAEEaNl9z16ENXMerFVSd2w_GjWSZtVgYCNTngu0vcZLYrk_kskSWYkX-857wN';
+
+const GACHA_WIN_WEBHOOK_STORAGE_KEY = 'rudra_gacha_win_webhook_url';
+
+function getGachaWinWebhookUrl() {
+    try {
+        if (DISCORD_GACHA_WIN_WEBHOOK_URL) return DISCORD_GACHA_WIN_WEBHOOK_URL;
+        const v = String(localStorage.getItem(GACHA_WIN_WEBHOOK_STORAGE_KEY) || '').trim();
+        if (!v) return '';
+        if (v.startsWith('https://') || v.startsWith('http://')) return v;
+        const decoded = atob(v);
+        if (decoded.startsWith('https://') || decoded.startsWith('http://')) return decoded;
+        return '';
+    } catch {
+        return '';
+    }
+}
 
 const DISCORD_ADMIN = {
 
@@ -29,6 +48,7 @@ const CONSTANTS = {
 // =========================
 const POINTS = {
     COST_GACHA: 100,
+    BASE_RATE: 0.0005, // 0.05%
     EARN: {
         ATTENDANCE: 10,
         POST: 10,
@@ -98,8 +118,44 @@ function getPointsRefsForUser(userId) {
 async function ensurePointDocsForCurrentUser() {
     if (!db) return;
     if (!currentUser?.uid) return;
+    const userId = currentUser.uid;
+    const { summaryRef, stateRef } = getPointsRefsForUser(userId);
     try {
-        await callFunction('pointsEnsureDocs', {});
+        await db.runTransaction(async (tx) => {
+            const [sSnap, stSnap] = await Promise.all([tx.get(summaryRef), tx.get(stateRef)]);
+            const nowIso = new Date().toISOString();
+
+            if (!sSnap.exists) {
+                tx.set(summaryRef, {
+                    userId,
+                    userNickname: currentUser.name || '',
+                    balance: 0,
+                    lifetimeEarned: 0,
+                    updatedAt: nowIso
+                });
+            } else {
+                tx.set(summaryRef, { userNickname: currentUser.name || '', updatedAt: nowIso }, { merge: true });
+            }
+
+            if (!stSnap.exists) {
+                tx.set(stateRef, {
+                    userId,
+                    userNickname: currentUser.name || '',
+                    lastCheckinKstDate: null,
+                    currentStreakDays: 0,
+                    claimed3: false,
+                    claimed7: false,
+                    claimed14: false,
+                    totalDraws: 0,
+                    totalWins: 0,
+                    gachaPity: 0,
+                    gachaNextLuck: null,
+                    updatedAt: nowIso
+                });
+            } else {
+                tx.set(stateRef, { userNickname: currentUser.name || '', updatedAt: nowIso }, { merge: true });
+            }
+        });
     } catch (e) {
         console.error('포인트 초기화 실패:', e);
     }
@@ -184,6 +240,13 @@ function getGachaCost(cfg) {
     return base;
 }
 
+function getGachaBaseRate(cfg) {
+    const active = isGachaEventActive(cfg);
+    if (!active) return POINTS.BASE_RATE;
+    const mult = Number(cfg.multiplier) || 1;
+    return POINTS.BASE_RATE * Math.max(0, mult);
+}
+
 function getGachaControl(cfg) {
     return {
         gachaEnabled: cfg?.gachaEnabled === true, // 명시적으로 true일 때만
@@ -192,6 +255,30 @@ function getGachaControl(cfg) {
         // winnersCount는 gacha_event에 쓰지 않고, 실제 winners/slots로부터 산출(보안/권한 문제 방지)
         winnersCount: null
     };
+}
+
+function pickNextLuckTier() {
+    // 보상 없음(다음 뽑기 확률 변화 없음) → null
+    // 다음 뽑기 한정 소폭 증가 → 'minor'
+    // 다음 뽑기 한정 대폭 증가 → 'major'
+    const u = Math.random() * 100;
+    if (u < 0.5) return 'major';
+    if (u < 2.0) return 'minor';
+    return null;
+}
+
+function computeWinRateForDraw({ cfg, baseRate, nextLuckTier }) {
+    const eventActive = isGachaEventActive(cfg);
+
+    if (eventActive) {
+        if (nextLuckTier === 'minor') return 0.02;
+        if (nextLuckTier === 'major') return 0.035;
+        return baseRate; // 기본은 배수 적용
+    }
+
+    if (nextLuckTier === 'minor') return baseRate + 0.01;
+    if (nextLuckTier === 'major') return baseRate + 0.03;
+    return baseRate;
 }
 
 async function getGachaWinnersCountBySlots(roundNo, maxWinners) {
@@ -209,7 +296,6 @@ async function getGachaWinnersCountBySlots(roundNo, maxWinners) {
 function formatFirestoreError(e) {
     const code = e?.code ? String(e.code) : '';
     const msg = e?.message ? String(e.message) : String(e || '');
-    // firebase compat 에러는 message에 "Missing or insufficient permissions." 같은 핵심이 들어감
     if (code && msg) return `${code}: ${msg}`;
     return msg || code || 'unknown error';
 }
@@ -396,8 +482,6 @@ function renderLedgerRows(list) {
         const giverRaw = it.adminNickname || it.adminUserId || '';
         const needsGiver = it.type === 'ADMIN_ADJUST' || it.type === 'ROOT_BULK_ADJUST';
         const giver = needsGiver ? (giverRaw ? `지급자: ${giverRaw}` : `지급자:`) : '';
-
-        // ref(refType/refId)는 UI에서 숨김(불필요)
         const meta = [when, kst ? `(${kst})` : null, reason, giver].filter(Boolean).join('\n');
         return `
             <div class="points-row">
@@ -432,8 +516,151 @@ async function doAttendanceCheck(opts = {}) {
     if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
     const silent = !!opts.silent;
+    const userId = currentUser.uid;
+
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+    const nowIso = new Date().toISOString();
+    const yesterday = addDaysToDateKey(kstDate, -1);
+
+    const { summaryRef, stateRef, ledgerCol } = getPointsRefsForUser(userId);
+    const ledgerRef = ledgerCol.doc(`EARN_ATTENDANCE__${kstDate}`);
+    const dailyRef = db.collection(FIRESTORE_POINTS.counters).doc(`D__${userId}__ATTENDANCE__${kstDate}`);
+    const weeklyRef = db.collection(FIRESTORE_POINTS.counters).doc(`W__${userId}__ATTENDANCE__${weekKey}`);
+    const bonusRefs = {
+        b3: ledgerCol.doc(`EARN_STREAK_3__${kstDate}`),
+        b7: ledgerCol.doc(`EARN_STREAK_7__${kstDate}`),
+        b14: ledgerCol.doc(`EARN_STREAK_14__${kstDate}`)
+    };
+
     try {
-        const result = await callFunction('pointsAttendance', {});
+        const result = await db.runTransaction(async (tx) => {
+            const [ledgerSnap, dSnap, wSnap, sSnap, stSnap, b3Snap, b7Snap, b14Snap] = await Promise.all([
+                tx.get(ledgerRef),
+                tx.get(dailyRef),
+                tx.get(weeklyRef),
+                tx.get(summaryRef),
+                tx.get(stateRef),
+                tx.get(bonusRefs.b3),
+                tx.get(bonusRefs.b7),
+                tx.get(bonusRefs.b14)
+            ]);
+
+            if (ledgerSnap.exists) return { ok: false, code: 'already' };
+
+            const dailyCount = Number(dSnap.exists ? dSnap.data()?.count : 0) || 0;
+            const weeklyCount = Number(wSnap.exists ? wSnap.data()?.count : 0) || 0;
+            if (dailyCount >= POINTS.LIMITS.ATTENDANCE.daily) return { ok: false, code: 'daily_limit' };
+            if (weeklyCount >= POINTS.LIMITS.ATTENDANCE.weekly) return { ok: false, code: 'weekly_limit' };
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const st = stSnap.exists ? stSnap.data() : {};
+            const curBalance = Number(sum?.balance) || 0;
+            const curLifetime = Number(sum?.lifetimeEarned) || 0;
+
+            let streakDays = Number(st?.currentStreakDays) || 0;
+            let claimed3 = !!st?.claimed3;
+            let claimed7 = !!st?.claimed7;
+            let claimed14 = !!st?.claimed14;
+
+            if (st?.lastCheckinKstDate === yesterday) {
+                streakDays += 1;
+            } else {
+                streakDays = 1;
+                claimed3 = false;
+                claimed7 = false;
+                claimed14 = false;
+            }
+
+            let bonusTotal = 0;
+
+            if (streakDays >= 3 && !claimed3 && !b3Snap.exists) {
+                bonusTotal += POINTS.EARN.STREAK_3;
+                claimed3 = true;
+                tx.set(bonusRefs.b3, {
+                    userId,
+                    userNickname: currentUser.name,
+                    type: 'EARN_STREAK_3',
+                    delta: POINTS.EARN.STREAK_3,
+                    refType: 'attendance_streak',
+                    refId: '3',
+                    reasonText: null,
+                    createdAt: nowIso,
+                    kstDate,
+                    kstWeekKey: weekKey
+                });
+            }
+            if (streakDays >= 7 && !claimed7 && !b7Snap.exists) {
+                bonusTotal += POINTS.EARN.STREAK_7;
+                claimed7 = true;
+                tx.set(bonusRefs.b7, {
+                    userId,
+                    userNickname: currentUser.name,
+                    type: 'EARN_STREAK_7',
+                    delta: POINTS.EARN.STREAK_7,
+                    refType: 'attendance_streak',
+                    refId: '7',
+                    reasonText: null,
+                    createdAt: nowIso,
+                    kstDate,
+                    kstWeekKey: weekKey
+                });
+            }
+            if (streakDays >= 14 && !claimed14 && !b14Snap.exists) {
+                bonusTotal += POINTS.EARN.STREAK_14;
+                claimed14 = true;
+                tx.set(bonusRefs.b14, {
+                    userId,
+                    userNickname: currentUser.name,
+                    type: 'EARN_STREAK_14',
+                    delta: POINTS.EARN.STREAK_14,
+                    refType: 'attendance_streak',
+                    refId: '14',
+                    reasonText: null,
+                    createdAt: nowIso,
+                    kstDate,
+                    kstWeekKey: weekKey
+                });
+            }
+
+            tx.set(ledgerRef, {
+                userId,
+                userNickname: currentUser.name,
+                type: 'EARN_ATTENDANCE',
+                delta: POINTS.EARN.ATTENDANCE,
+                refType: 'attendance',
+                refId: kstDate,
+                reasonText: null,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            tx.set(dailyRef, { userId, action: 'ATTENDANCE', scope: 'D', key: kstDate, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+            tx.set(weeklyRef, { userId, action: 'ATTENDANCE', scope: 'W', key: weekKey, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+
+            tx.set(summaryRef, {
+                userId,
+                userNickname: currentUser.name,
+                balance: curBalance + POINTS.EARN.ATTENDANCE + bonusTotal,
+                lifetimeEarned: curLifetime + POINTS.EARN.ATTENDANCE + bonusTotal,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            tx.set(stateRef, {
+                userId,
+                userNickname: currentUser.name,
+                lastCheckinKstDate: kstDate,
+                currentStreakDays: streakDays,
+                claimed3,
+                claimed7,
+                claimed14,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            return { ok: true, streakDays, bonusTotal };
+        });
+
         if (!result?.ok) {
             if (silent) return;
             if (result.code === 'already') return showToast(`<i class="fa-solid fa-circle-info"></i> 오늘은 이미 출석 체크를 했습니다.`);
@@ -455,8 +682,71 @@ async function awardPostCreatePoints(postType, postId) {
     if (!db || !currentUser?.uid) return;
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return;
     if (!postId) return;
+    const userId = currentUser.uid;
+
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+    const nowIso = new Date().toISOString();
+
+    const isParty = postType === 'party';   // 파티원 구해요
+    const isMember = postType === 'member'; // 파티 구해요
+    if (!isParty && !isMember) return;
+
+    const actionKey = isParty ? 'POST_PARTY' : 'POST_MEMBER';
+    const limits = isParty ? POINTS.LIMITS.POST_PARTY : POINTS.LIMITS.POST_MEMBER;
+    const type = isParty ? 'EARN_POST_PARTY' : 'EARN_POST_MEMBER';
+
+    const { summaryRef, ledgerCol } = getPointsRefsForUser(userId);
+    const ledgerRef = ledgerCol.doc(`${type}__${postId}`);
+    const dailyRef = db.collection(FIRESTORE_POINTS.counters).doc(`D__${userId}__${actionKey}__${kstDate}`);
+    const weeklyRef = db.collection(FIRESTORE_POINTS.counters).doc(`W__${userId}__${actionKey}__${weekKey}`);
+
     try {
-        const res = await callFunction('pointsPostAward', { postType, postId: String(postId) });
+        const res = await db.runTransaction(async (tx) => {
+            const [lSnap, dSnap, wSnap, sSnap] = await Promise.all([
+                tx.get(ledgerRef),
+                tx.get(dailyRef),
+                tx.get(weeklyRef),
+                tx.get(summaryRef)
+            ]);
+
+            if (lSnap.exists) return { ok: false, code: 'already' };
+            const dailyCount = Number(dSnap.exists ? dSnap.data()?.count : 0) || 0;
+            const weeklyCount = Number(wSnap.exists ? wSnap.data()?.count : 0) || 0;
+            if (dailyCount >= limits.daily) return { ok: false, code: 'daily_limit' };
+            if (weeklyCount >= limits.weekly) return { ok: false, code: 'weekly_limit' };
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const curBalance = Number(sum?.balance) || 0;
+            const curLifetime = Number(sum?.lifetimeEarned) || 0;
+
+            tx.set(ledgerRef, {
+                userId,
+                userNickname: currentUser.name,
+                type,
+                delta: POINTS.EARN.POST,
+                refType: 'post',
+                refId: String(postId),
+                reasonText: null,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            tx.set(dailyRef, { userId, action: actionKey, scope: 'D', key: kstDate, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+            tx.set(weeklyRef, { userId, action: actionKey, scope: 'W', key: weekKey, count: firebase.firestore.FieldValue.increment(1), updatedAt: nowIso }, { merge: true });
+
+            tx.set(summaryRef, {
+                userId,
+                userNickname: currentUser.name,
+                balance: curBalance + POINTS.EARN.POST,
+                lifetimeEarned: curLifetime + POINTS.EARN.POST,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            return { ok: true };
+        });
+
         if (res?.ok) {
             showToast(`<i class="fa-solid fa-coins"></i> 포인트 +${POINTS.EARN.POST}pt (글 작성)`);
             await refreshPointsHeader();
@@ -542,7 +832,13 @@ async function doGachaDraw() {
     if (!currentUser?.uid) return alert('로그인 후 이용 가능합니다.');
     if (!currentUser.pointsApproved && !currentUser.isAdmin) return alert('포인트 기능은 관리자 승인 후 사용 가능합니다.');
 
+    const userId = currentUser.uid;
+
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+    const nowIso = new Date().toISOString();
     const cfg = await loadGachaEventConfig(false);
+    const baseRate = getGachaBaseRate(cfg);
     const cost = getGachaCost(cfg);
     const ctrl = getGachaControl(cfg);
 
@@ -552,8 +848,16 @@ async function doGachaDraw() {
     if (!ctrl.roundNo || !ctrl.maxWinners) {
         return showToast(`<i class="fa-solid fa-circle-info"></i> 뽑기 회차/당첨 인원 설정이 필요합니다.`);
     }
+    if (ctrl.winnersCount >= ctrl.maxWinners) {
+        return showToast(`<i class="fa-solid fa-circle-info"></i> 이번 회차 뽑기가 종료되었습니다.`);
+    }
 
-    // 연출 시작(결과 확정 전까지 “뽑는중” 표시)
+    const { summaryRef, stateRef, ledgerCol, drawsCol } = getPointsRefsForUser(userId);
+    const drawId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const spendLedgerRef = ledgerCol.doc(`SPEND_GACHA__${drawId}`);
+    const drawRef = drawsCol.doc(drawId);
+
+    // 뽑기 연출
     const showRolling = () => {
         if (elements.gachaResult) elements.gachaResult.classList.add('hidden');
         if (elements.gachaRollStage) elements.gachaRollStage.classList.remove('hidden');
@@ -583,8 +887,140 @@ async function doGachaDraw() {
     }
 
     try {
-        // 최소 연출 시간 확보(체감용)
-        const [result] = await Promise.all([callFunction('gachaDraw', {}), sleep(1400)]);
+        const txPromise = db.runTransaction(async (tx) => {
+            const cfgRef = db.collection(FIRESTORE_POINTS.gachaEvent).doc('current');
+            const roundRef = db.collection(FIRESTORE_POINTS.gachaRounds).doc(String(ctrl.roundNo));
+            const winnerRef = roundRef.collection('winners').doc(userId);
+            const slotRefs = Array.from({ length: ctrl.maxWinners }, (_, i) => roundRef.collection('slots').doc(String(i + 1)));
+
+            const [sSnap, stSnap, spendSnap, cfgSnap, winnerSnap, ...slotSnaps] = await Promise.all([
+                tx.get(summaryRef),
+                tx.get(stateRef),
+                tx.get(spendLedgerRef),
+                tx.get(cfgRef),
+                tx.get(winnerRef),
+                ...slotRefs.map(r => tx.get(r))
+            ]);
+            if (spendSnap.exists) return { ok: false, code: 'already' };
+            if (winnerSnap.exists) return { ok: false, code: 'already_winner' };
+
+            const cfgNow = cfgSnap.exists ? (cfgSnap.data() || {}) : {};
+            const ctrlNow = getGachaControl(cfgNow);
+            if (!ctrlNow.gachaEnabled) return { ok: false, code: 'gacha_disabled' };
+            if (!ctrlNow.roundNo || !ctrlNow.maxWinners) return { ok: false, code: 'gacha_unconfigured' };
+            if (ctrlNow.roundNo !== ctrl.roundNo) return { ok: false, code: 'round_changed' };
+
+            const winnersCountNow = slotSnaps.filter(s => s.exists).length;
+            if (winnersCountNow >= ctrlNow.maxWinners) return { ok: false, code: 'round_ended' };
+            const alreadyWinnerBySlot = slotSnaps.some(s => s.exists && (s.data()?.uid === userId));
+            if (alreadyWinnerBySlot) return { ok: false, code: 'already_winner' };
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const balance = Number(sum?.balance) || 0;
+            if (balance < cost) return { ok: false, code: 'insufficient', need: cost };
+
+            const st = stSnap.exists ? stSnap.data() : {};
+            const beforeDraws = Number(st?.totalDraws) || 0;
+            const nextLuckTier = st?.gachaNextLuck || null; // 이전 꽝에서 얻은 "다음 1회 한정" 행운
+            const winRate = computeWinRateForDraw({ cfg, baseRate, nextLuckTier });
+
+            const u = new Uint32Array(1);
+            crypto.getRandomValues(u);
+            const roll = u[0] % 1000000; // 0..999999
+            const winThreshold = Math.floor(winRate * 1000000);
+            const isWin = roll < winThreshold;
+
+            // 이번 뽑기에서 nextLuckTier는 소비됨(1회 한정)
+            let nextLuckForNextDraw = null;
+            let loseLuckOutcome = null;
+            if (!isWin) {
+                loseLuckOutcome = pickNextLuckTier();
+                nextLuckForNextDraw = loseLuckOutcome; // null | 'minor' | 'major'
+            }
+
+            // 결제 원장
+            tx.set(spendLedgerRef, {
+                userId,
+                userNickname: currentUser.name,
+                type: 'SPEND_GACHA',
+                delta: -cost,
+                refType: 'gacha_draw',
+                refId: drawId,
+                reasonText: null,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            // 뽑기 결과 기록
+            tx.set(drawRef, {
+                userId,
+                userNickname: currentUser.name,
+                createdAt: nowIso,
+                kstDate,
+                costPoints: cost,
+                baseRate: baseRate,
+                winRateApplied: winRate,
+                nextLuckUsed: nextLuckTier,
+                userTotalDrawsBefore: beforeDraws,
+                rngRoll: roll,
+                isWin,
+                loseLuckOutcome: loseLuckOutcome
+            });
+
+            // 당첨자 기록(슬롯 점유로 당첨 인원 제한)
+            if (isWin) {
+                const firstEmptyIdx = slotSnaps.findIndex(s => !s.exists);
+                if (firstEmptyIdx < 0) return { ok: false, code: 'round_ended' };
+                const slotRef = slotRefs[firstEmptyIdx];
+
+                tx.set(slotRef, {
+                    uid: userId,
+                    nickname: currentUser.name || '',
+                    wonAt: nowIso,
+                    drawId: drawId,
+                    roundNo: ctrlNow.roundNo,
+                    slotNo: firstEmptyIdx + 1
+                });
+                tx.set(winnerRef, {
+                    uid: userId,
+                    nickname: currentUser.name || '',
+                    wonAt: nowIso,
+                    drawId: drawId,
+                    roundNo: ctrlNow.roundNo
+                });
+            }
+
+            // 요약 갱신 (누적 획득은 증가하지 않음)
+            tx.set(summaryRef, {
+                userId,
+                userNickname: currentUser.name,
+                balance: balance - cost,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            tx.set(stateRef, {
+                userId,
+                userNickname: currentUser.name,
+                totalDraws: beforeDraws + 1,
+                totalWins: (Number(st?.totalWins) || 0) + (isWin ? 1 : 0),
+                gachaPity: 0,
+                gachaNextLuck: nextLuckForNextDraw,
+                updatedAt: nowIso
+            }, { merge: true });
+
+            return {
+                ok: true,
+                isWin,
+                roll,
+                usedNextLuck: nextLuckTier,
+                newNextLuck: nextLuckForNextDraw,
+                eventActive: isGachaEventActive(cfg)
+            };
+        });
+
+        // 최소 연출 시간 확보
+        const [result] = await Promise.all([txPromise, sleep(1400)]);
         if (rollingTimer) clearInterval(rollingTimer);
         hideRolling();
 
@@ -630,6 +1066,12 @@ async function doGachaDraw() {
         if (result.isWin) {
             showToast(`<i class="fa-solid fa-trophy"></i> 당첨! (확률 초기화)`);
             launchConfetti();
+            sendGachaWinToDiscord([
+                '🎉 **뽑기 당첨!**',
+                `- 닉네임: ${currentUser?.name || ''}`,
+                `- uid: ${currentUser?.uid || ''}`,
+                `- 시각(KST): ${formatKst(new Date().toISOString()) || ''}`
+            ].join('\n'));
         } else {
             showToast(`<i class="fa-solid fa-dice"></i> 뽑기 완료`);
         }
@@ -1024,15 +1466,100 @@ async function rootBulkAdjustAllUsers() {
     const ok = confirm(`전체 유저에게 ${delta >= 0 ? '+' : ''}${delta}pt를 일괄 적용할까요?\n\n- 대상: ${target}\n- 사유: ${reason}\n\n※ 되돌리기 어렵습니다.`);
     if (!ok) return;
 
+    const bulkId = `bulk_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const nowIso = new Date().toISOString();
+
+    let processed = 0;
+    let skipped = 0;
+    let lastDoc = null;
+
     const status = (msg) => {
         if (elements.rootBulkStatusText) elements.rootBulkStatusText.textContent = msg;
     };
     status('진행중...');
 
     try {
-        const res = await callFunction('rootBulkAdjustAllUsers', { mode, amount: amt, reason, target });
-        const processed = Number(res?.processed || 0);
-        const skipped = Number(res?.skipped || 0);
+        while (true) {
+            let q = db.collection(FIRESTORE_POINTS.userProfiles).orderBy('createdAt', 'asc').limit(150);
+            if (lastDoc) q = q.startAfter(lastDoc);
+            const snap = await q.get();
+            if (snap.empty) break;
+
+            const docs = snap.docs;
+            lastDoc = docs[docs.length - 1];
+
+            for (const d of docs) {
+                const p = d.data() || {};
+                const uid = p.uid || d.id;
+                if (!uid) { skipped++; continue; }
+
+                if (target === 'approved_only' && p.pointsApproved !== true) {
+                    skipped++;
+                    continue;
+                }
+
+                const { summaryRef, ledgerCol } = getPointsRefsForUser(uid);
+                const ledgerRef = ledgerCol.doc(`ROOT_BULK_ADJUST__${bulkId}`);
+
+                await db.runTransaction(async (tx) => {
+                    const [lSnap, sSnap] = await Promise.all([tx.get(ledgerRef), tx.get(summaryRef)]);
+                    if (lSnap.exists) return;
+
+                    const sum = sSnap.exists ? (sSnap.data() || {}) : {};
+                    const balance = Number(sum.balance) || 0;
+                    const lifetime = Number(sum.lifetimeEarned) || 0;
+                    const nextBalance = balance + delta;
+                    const nextLifetime = Math.max(0, lifetime + delta);
+
+                    tx.set(ledgerRef, {
+                        userId: uid,
+                        userNickname: String(p.nickname || ''),
+                        type: 'ROOT_BULK_ADJUST',
+                        delta,
+                        refType: 'root_bulk',
+                        refId: bulkId,
+                        reasonText: reason,
+                        adminNickname: currentUser.name || 'ROOT',
+                        adminUserId: currentUser.uid,
+                        createdAt: nowIso,
+                        kstDate: getKstDateKeyFromNow(),
+                        kstWeekKey: getIsoWeekKeyFromKstNow()
+                    });
+
+                    tx.set(summaryRef, {
+                        userId: uid,
+                        userNickname: String(p.nickname || ''),
+                        balance: nextBalance,
+                        lifetimeEarned: nextLifetime,
+                        updatedAt: nowIso
+                    }, { merge: true });
+                });
+
+                processed++;
+                if (processed % 10 === 0) status(`진행중... 처리 ${processed}명 / 제외 ${skipped}명`);
+            }
+        }
+
+        // 공개 로그에도 기록(포인트 로그 탭)
+        try {
+            const publicRef = db.collection(FIRESTORE_POINTS.publicAdminLog).doc(bulkId);
+            await publicRef.set({
+                type: 'ROOT_BULK_ADJUST',
+                delta,
+                reasonText: reason,
+                adminNickname: currentUser.name || 'ROOT',
+                adminId: currentUser.uid,
+                targetNickname: target === 'approved_only' ? '전체(승인된 계정)' : '전체(모든 계정)',
+                targetUserId: null,
+                processedCount: processed,
+                skippedCount: skipped,
+                createdAt: nowIso,
+                kstDate: getKstDateKeyFromNow()
+            }, { merge: true });
+        } catch (e) {
+            console.warn('public log write failed:', e);
+        }
+
         status(`완료: 처리 ${processed}명 / 제외 ${skipped}명`);
         showToast(`<i class="fa-solid fa-bolt"></i> 일괄 적용 완료: ${processed}명`);
     } catch (e) {
@@ -1050,8 +1577,35 @@ window.approvePointsForUser = async function(uid) {
     const ok = confirm(`이 유저의 포인트 기능을 승인할까요?\n\nuid: ${uid}`);
     if (!ok) return;
 
+    const profileRef = db.collection(FIRESTORE_POINTS.userProfiles).doc(uid);
+    const now = firebase.firestore.FieldValue.serverTimestamp();
+
     try {
-        await callFunction('pointsApproveUser', { uid: String(uid) });
+        await db.runTransaction(async (tx) => {
+            // 트랜잭션 규칙: 모든 read를 먼저 수행해야 함
+            const { summaryRef, stateRef } = getPointsRefsForUser(uid);
+            const [pSnap, sSnap, stSnap] = await Promise.all([
+                tx.get(profileRef),
+                tx.get(summaryRef),
+                tx.get(stateRef)
+            ]);
+            if (!pSnap.exists) throw new Error('프로필이 없습니다.');
+            const p = pSnap.data() || {};
+            if (p.pointsApproved === true) return;
+
+            tx.set(profileRef, { pointsApproved: true, approvedAt: now, approvedBy: currentUser.uid }, { merge: true });
+
+            // 승인과 동시에 포인트 문서도 초기화(요약/상태)
+            const nowIso = new Date().toISOString();
+            const nick = String(p.nickname || '').trim();
+
+            if (!sSnap.exists) {
+                tx.set(summaryRef, { userId: uid, userNickname: nick, balance: 0, lifetimeEarned: 0, updatedAt: nowIso });
+            }
+            if (!stSnap.exists) {
+                tx.set(stateRef, { userId: uid, userNickname: nick, lastCheckinKstDate: null, currentStreakDays: 0, claimed3: false, claimed7: false, claimed14: false, totalDraws: 0, totalWins: 0, gachaPity: 0, updatedAt: nowIso });
+            }
+        });
 
         showToast(`<i class="fa-solid fa-check"></i> 승인 완료`);
         await Promise.all([loadPendingApprovals(), loadPointsPublicAdminLog()]);
@@ -1073,8 +1627,70 @@ async function adminAdjustPoints() {
     if (!Number.isFinite(delta) || delta === 0) return alert('포인트 변경값을 입력하세요. (0 제외)');
     if (!reason) return alert('사유를 입력하세요. (필수)');
 
+    const nk = nicknameKey(targetNick);
+    if (!nk) return alert('닉네임 형식을 확인해 주세요.');
+
+    const nickRef = db.collection(FIRESTORE_POINTS.nicknameIndex).doc(nk);
+    const nickSnap = await nickRef.get().catch(() => null);
+    const targetUserId = nickSnap?.exists ? (nickSnap.data()?.uid || null) : null;
+    if (!targetUserId) return alert('대상 유저를 찾을 수 없습니다.');
+
+    const logId = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const nowIso = new Date().toISOString();
+    const kstDate = getKstDateKeyFromNow();
+    const weekKey = getIsoWeekKeyFromKstNow();
+
+    const targetSummaryRef = db.collection(FIRESTORE_POINTS.summary).doc(targetUserId);
+    const targetLedgerCol = db.collection(FIRESTORE_POINTS.ledgerUsers).doc(targetUserId).collection('items');
+    const targetLedgerRef = targetLedgerCol.doc(`ADMIN_ADJUST__${logId}`);
+    const publicRef = db.collection(FIRESTORE_POINTS.publicAdminLog).doc(logId);
+
     try {
-        await callFunction('adminAdjustPoints', { targetNickname: targetNick, delta, reason });
+        await db.runTransaction(async (tx) => {
+            const [sSnap, lSnap, pSnap] = await Promise.all([tx.get(targetSummaryRef), tx.get(targetLedgerRef), tx.get(publicRef)]);
+            if (lSnap.exists || pSnap.exists) return;
+
+            const sum = sSnap.exists ? sSnap.data() : {};
+            const balance = Number(sum?.balance) || 0;
+            const lifetime = Number(sum?.lifetimeEarned) || 0;
+            // 뽑기/일반 소모는 lifetimeEarned에 영향을 주지 않음(ADMIN_ADJUST만 여기서 처리)
+            const nextLifetime = Math.max(0, lifetime + delta);
+
+            tx.set(targetLedgerRef, {
+                userId: targetUserId,
+                userNickname: targetNick,
+                type: 'ADMIN_ADJUST',
+                delta,
+                refType: 'admin_adjust',
+                refId: logId,
+                reasonText: reason,
+                adminNickname: currentUser.name,
+                adminUserId: currentUser.uid,
+                createdAt: nowIso,
+                kstDate,
+                kstWeekKey: weekKey
+            });
+
+            tx.set(publicRef, {
+                type: 'ADMIN_ADJUST',
+                delta,
+                reasonText: reason,
+                adminNickname: currentUser.name,
+                adminId: currentUser.uid,
+                targetNickname: targetNick,
+                targetUserId,
+                createdAt: nowIso,
+                kstDate
+            });
+
+            tx.set(targetSummaryRef, {
+                userId: targetUserId,
+                userNickname: targetNick,
+                balance: balance + delta,
+                lifetimeEarned: nextLifetime,
+                updatedAt: nowIso
+            }, { merge: true });
+        });
 
         showToast(`<i class="fa-solid fa-gavel"></i> 관리자 조정 완료 (${delta >= 0 ? '+' : ''}${fmtInt(delta)}pt)`);
         elements.adminAdjustReason.value = '';
@@ -1158,6 +1774,26 @@ async function sendLogToDiscord(lines) {
         });
     } catch (e) {
         console.error("로그 웹훅 전송 실패:", e);
+    }
+}
+
+async function sendGachaWinToDiscord(payload) {
+    const url = getGachaWinWebhookUrl();
+    if (!url) {
+        // 웹훅 미설정이면 스킵(필요시 콘솔에만)
+        console.warn('[gacha] win webhook not configured. set localStorage:', GACHA_WIN_WEBHOOK_STORAGE_KEY);
+        return;
+    }
+    try {
+        const content = String(payload || '').trim();
+        if (!content) return;
+        await fetch(`${url}?wait=false`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content })
+        });
+    } catch (e) {
+        console.error("뽑기 당첨 웹훅 전송 실패:", e);
     }
 }
 
@@ -1268,9 +1904,7 @@ function canManagePost(post) {
     if (!post) return false;
     if (!currentUser) return false;
     if (currentUser.isAdmin) return true;
-    // 일반 유저는 "내 uid == 작성자 uid" 일 때만 관리 가능 (추가로 비밀번호 확인)
     if (currentUser.uid && post.authorUid && currentUser.uid === post.authorUid) return true;
-    // 구버전 데이터(authorUid 없던 시절) 호환: 닉네임 비교
     return currentUser.name && post.author && currentUser.name === post.author.name;
 }
 
@@ -1395,7 +2029,6 @@ const elements = {
     postTitle: document.getElementById('postTitle'),
     postContent: document.getElementById('postContent'),
     postLink: document.getElementById('postLink'),
-    postPassword: document.getElementById('postPassword'),
     submitPostBtn: document.getElementById('submitPostBtn'),
     noticeMessage: document.getElementById('noticeMessage'),
     categoryGroup: document.getElementById('categoryGroup'),
@@ -1403,7 +2036,6 @@ const elements = {
     linkGroup: document.getElementById('linkGroup'),
     dpsGroup: document.getElementById('dpsGroup'),
     expirationGroup: document.getElementById('expirationGroup'),
-    passwordGroup: document.getElementById('passwordGroup'),
     authModal: document.getElementById('authModal'),
     authCloseBtn: document.querySelector('.auth-close'),
     authForm: document.getElementById('authForm'),
@@ -1583,7 +2215,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
 
     // 만료 정리 루틴: 스냅샷 갱신이 없더라도 "페이지가 열려있는 동안" 주기적으로 정리
-    // (서버가 없으므로, 아무도 접속하지 않으면 정리는 그 시점까지 지연될 수 있음)
+    // 서버가 없으므로, 아무도 접속하지 않으면 정리는 그 시점까지 지연될 수 있음
     setInterval(() => {
         try { checkExpiredPosts(); } catch (e) { console.error(e); }
     }, 60 * 1000);
@@ -1672,9 +2304,7 @@ function setupEventListeners() {
 
     elements.logoutBtn.addEventListener('click', logout);
 
-    // adminVerifyBtn(디스코드 OAuth)은 "완벽 보안" 구조에선 사용하지 않음
     // (관리자 여부는 Firestore `admins/{uid}` 존재 여부로 판별)
-
     if (elements.adminToolsBtn) {
         elements.adminToolsBtn.addEventListener('click', openAdminToolsModal);
     }
@@ -1883,6 +2513,7 @@ function setupEventListeners() {
             if (e.target.id === 'writeModal') return;
             if (e.target.id === 'dpsCalculatorModal') return;
             if (e.target.id === 'searchResultModal') return;
+            if (e.target.id === 'pointsModal') return;
             e.target.classList.add('hidden');
         }
     });
@@ -2426,8 +3057,6 @@ async function importPostsJson() {
             if (!payload.type) payload.type = 'party';
 
             if (mode === 'create_only') {
-                // create_only는 존재 여부를 batch에서 확인할 수 없으므로 "set(merge=false)" 대신 "set(merge=true)"로 안전하게 쓰지 않음
-                // 여기서는 그냥 skip 처리(정확한 create_only는 별도 get 필요)
                 skipped++;
                 continue;
             }
@@ -2488,8 +3117,8 @@ function computeAtulScoreFromStats(stats, options = {}) {
     let adjustedAttackPower = attackPower;
 
     // 치명 처리:
-    // - legacy: (기존 방식) "치피증이 있을 때만" 치명 기대값 증가를 반영
-    // - expected: (추천용) 기본 치명(1.5배) 기대값을 항상 반영
+    // - legacy: "치피증이 있을 때만" 치명 기대값 증가를 반영
+    // - expected: 기본 치명(1.5배) 기대값을 항상 반영
     const BASE_CRITICAL_DAMAGE = 1.5;
     const p = Math.min(Math.max(criticalChance / 100, 0), 1);
 
@@ -2667,7 +3296,7 @@ function recommendStatsForTargetScore() {
         for (const k of knobs) {
             const expected = evalOneStepExpected(working, k);
             const legacy = evalOneStepLegacy(working, k);
-            // 선택 기준은 expected(기대값) 이지만, 실제 목표 도달(표시)은 legacy 기준으로 누적
+            // 선택 기준은 expected(기대값), 실제 목표 도달(표시)은 legacy 기준으로 누적
             const scoreGainForChoice = expected.gain;
             if (!best || scoreGainForChoice > best.choiceGain) {
                 best = { k, choiceGain: scoreGainForChoice, legacyGain: legacy.gain, nextStats: legacy.nextStats };
@@ -2784,10 +3413,7 @@ function openWriteModal(isNotice, editPost = null) {
         elements.linkGroup.classList.add('hidden');
         elements.dpsGroup.classList.add('hidden');
         elements.expirationGroup.classList.add('hidden');
-        elements.passwordGroup.classList.add('hidden');
-        
         elements.postCategory.removeAttribute('required');
-        elements.postPassword.removeAttribute('required');
     } else {
         // 일반 작성 모드
         elements.noticeMessage.classList.add('hidden');
@@ -2796,11 +3422,7 @@ function openWriteModal(isNotice, editPost = null) {
         elements.linkGroup.classList.remove('hidden');
         elements.dpsGroup.classList.remove('hidden');
         elements.expirationGroup.classList.remove('hidden');
-        elements.passwordGroup.classList.remove('hidden');
-
         elements.postCategory.setAttribute('required', 'true');
-        if (!isEditMode) elements.postPassword.setAttribute('required', 'true');
-        else elements.postPassword.removeAttribute('required');
     }
 }
 
@@ -2860,7 +3482,7 @@ async function initAuth() {
             let [pSnap, aSnap, rSnap] = await Promise.all([profileRef.get(), adminRef.get(), rootRef.get()]);
 
             if (!pSnap.exists) {
-                // 회원가입 직후: 프로필 생성 트랜잭션이 진행 중일 수 있으므로 잠깐 대기
+                // 회원가입 직후 프로필 생성 트랜잭션이 진행 중일 수 있으므로 잠깐 대기
                 if (signupUidInFlight && signupUidInFlight === u.uid) {
                     const waited = await waitForUserProfile(u.uid, 15, 200);
                     if (waited?.exists) {
@@ -2935,13 +3557,12 @@ async function initAuth() {
 }
 
 function isValidLoginId(id) {
-    // Firebase email로 변환할 것이므로 안전한 문자만 허용(원하면 규칙 완화 가능)
     return /^[a-zA-Z0-9._-]{3,20}$/.test(String(id || ''));
 }
 
 function loginIdToEmail(loginId) {
     // 이메일 입력 없이 "아이디"만 받기 위한 내부 변환
-    // 프로젝트 내 고정 도메인(실제 메일 전송 안 함)
+    // 프로젝트 내 고정 도메인
     const id = String(loginId || '').trim().toLowerCase();
     return `${id}@aion2rudra.local`;
 }
@@ -3149,15 +3770,6 @@ function handlePostSubmit(e) {
         return;
     }
 
-    const password = elements.postPassword.value;
-
-    if (!isNoticeWritingMode && !isEditMode) {
-        if (!password || password.length < 4) {
-            alert('비밀번호를 4자리 이상 입력해주세요.');
-            return;
-        }
-    }
-
     let postType = currentTab;
     if (currentTab === 'completed') postType = 'party';
 
@@ -3216,7 +3828,6 @@ function handlePostSubmit(e) {
         postData.difficulty = difficulty;
         postData.roles = selectedRoles;
         postData.link = link;
-        postData.password = password;
         postData.createdAt = new Date().toISOString();
         postData.expirationTime = expirationMs;
         postData.status = 'recruiting';
@@ -3243,7 +3854,7 @@ function handlePostSubmit(e) {
             uid: currentUser.uid || null
         };
     } else {
-        // 수정 모드: 공지사항이면 expirationTime은 항상 0으로 유지
+        // 공지사항이면 expirationTime은 항상 0으로 유지
         if (editingPostData && editingPostData.type === 'notice') {
             postData.expirationTime = 0;
         }
@@ -3274,7 +3885,7 @@ function handlePostSubmit(e) {
                     elements.postForm.reset();
                     showToast(`<i class="fa-solid fa-check"></i> 등록되었습니다.`);
 
-                    // 포인트 지급: 파티원 구해요/파티 구해요 글 작성 시 +10 (일/주 제한 KST 기준)
+                    // 파티원 구해요/파티 구해요 글 작성 시 +10 (일/주 제한 KST 기준)
                     try {
                         await ensurePointDocsForCurrentUser();
                         await awardPostCreatePoints(postData.type, docRef?.id);
@@ -3387,13 +3998,13 @@ function checkExpiredPosts() {
     let expiredCount = 0;
 
     posts.forEach(post => {
-        // 공지사항은 영구 보존 (관리자가 직접 삭제할 때만 삭제됨)
+        // 공지사항은 영구 보존 (관리자가 직접 삭제할 때만 삭제)
         if (post.type === 'notice') return;
 
         // 이미 삭제 처리된 글은 스킵
         if (post.deletedAt) return;
         
-        // 매칭 완료된 게시글은 자동 삭제 안 함 (관리자가 직접 삭제할 때만 삭제됨)
+        // 매칭 완료된 게시글은 자동 삭제 안 함 (관리자가 직접 삭제할 때만 삭제)
         if (post.status === 'full') return;
         
         // expirationTime이 0이면 자동 삭제 안 함 (유지)
@@ -3564,7 +4175,6 @@ async function handleDiscordAdminCallback() {
             roleId: DISCORD_ADMIN.roleId
         };
 
-        // 어드민 인증은 "권한"만 증명합니다. 캐릭터(직업/레벨/아바타) 미인증 상태면 한번 더 조회해서 갱신합니다.
         await refreshCurrentUserCharacter();
 
         localStorage.setItem('rudra_user', JSON.stringify(currentUser));
@@ -3962,18 +4572,12 @@ window.checkPasswordAndManage = function(postId) {
         return;
     }
 
-    // 작성자 닉네임이 아니면 비밀번호를 알아도 관리 불가 (사칭/무단삭제 방지)
     if (!canManagePost(post)) {
         alert('작성자 본인(동일 닉네임)만 관리할 수 있습니다.');
         return;
     }
 
-    const inputPwd = prompt('게시글 비밀번호를 입력하세요:');
-    if (inputPwd === post.password) {
-        openManageModal(post);
-    } else {
-        alert('비밀번호가 일치하지 않습니다.');
-    }
+    openManageModal(post);
 }
 
 function openManageModal(post) {
@@ -4110,7 +4714,7 @@ async function fetchCharacterData(nickname) {
     try {
         lastCharacterFetchError = null;
 
-        // raceId/응답 구조 변경에 대비: 여러 케이스로 검색 시도
+        // raceId/응답 구조 변경에 대비 여러 케이스로 검색 시도
         const base = `${PROXY_URL}https://api.aon2.info/api/v1/aion2/rankings/item-level/search?characterName=${encodeURIComponent(nickname)}&serverId=2002`;
         const candidates = [
             `${base}&raceId=2`,
