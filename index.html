@@ -668,8 +668,8 @@
                         <div class="points-howto-card">
                             <div class="t">게시글 작성</div>
                             <ul class="points-howto-list">
-                                <li>파티원 구해요: 1회 <b>+10pt</b> (일일 최대 3회 / 주 21회)</li>
-                                <li>파티 구해요: 1회 <b>+10pt</b> (일일 최대 3회 / 주 21회)</li>
+                                <li>파티원 구해요: 1회 <b>+10pt</b> (일 3 / 주 21)</li>
+                                <li>파티 구해요: 1회 <b>+10pt</b> (일 3 / 주 21)</li>
                             </ul>
                         </div>
                         <div class="points-howto-card">
@@ -679,7 +679,7 @@
                                 <li>7일 연속: <b>+30pt</b></li>
                                 <li>14일 연속: <b>+70pt</b></li>
                             </ul>
-                            <div class="points-howto-sub">연속 출이 끊기면 보너스 진행이 초기화될 수 있습니다.</div>
+                            <div class="points-howto-sub">연속이 끊기면 보너스 진행이 초기화될 수 있습니다.</div>
                         </div>
                         <div class="points-howto-card">
                             <div class="t">관리자 지급/회수</div>
@@ -690,7 +690,7 @@
                         </div>
                     </div>
                     <div class="points-howto-foot">
-                        * 포인트는 '원장(기록)' 기반으로 관리되며, 잔액/누적은 원장으로부터 계산됩니다.
+                        * 포인트는 “원장(기록)” 기반으로 관리되며, 잔액/누적은 원장으로부터 계산됩니다.
                     </div>
                 </div>
 
@@ -748,15 +748,33 @@
                     <div class="points-card">
                         <div class="points-card-title">뽑기</div>
                         <div class="points-kv">
-                            <div><span class="k">1회 비용</span><span id="gachaCostText" class="v">300pt</span></div>
+                            <div><span class="k">1회 비용</span><span id="gachaCostText" class="v">100pt</span></div>
                             <div><span class="k">내 누적 뽑기</span><span id="gachaTotalDraws" class="v">0</span></div>
                             <div><span class="k">이벤트</span><span id="gachaEventBadge" class="v">-</span></div>
+                            <div><span class="k">회차</span><span id="gachaRoundText" class="v">-</span></div>
+                            <div><span class="k">당첨 현황</span><span id="gachaWinnersText" class="v">-</span></div>
                         </div>
                         <div class="points-actions">
                             <button id="gachaDrawBtn" class="btn-primary"><i class="fa-solid fa-dice"></i> 1회 뽑기</button>
                             <button id="gachaRefreshBtn" class="btn-outline"><i class="fa-solid fa-rotate"></i> 새로고침</button>
                         </div>
+                        <div id="gachaRollStage" class="gacha-roll hidden">
+                            <div class="gacha-roll-inner">
+                                <div class="gacha-roll-title">뽑기 진행중...</div>
+                                <div id="gachaRollText" class="gacha-roll-text">행운을 불러오는 중</div>
+                                <div class="gacha-roll-bar">
+                                    <div class="gacha-roll-bar-fill"></div>
+                                </div>
+                            </div>
+                        </div>
                         <div id="gachaResult" class="points-result-box hidden"></div>
+
+                        <div class="points-card" style="margin-top: 14px;">
+                            <div class="points-card-title">이번 회차 당첨자</div>
+                            <div id="gachaWinnersList" class="points-list">
+                                <div class="points-empty">-</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -769,6 +787,27 @@
                     <div id="rootEventCard" class="points-card hidden" style="margin-top: 14px;">
                         <div class="points-card-title">ROOT 전용: 이벤트 설정 (KST)</div>
                         <div class="points-admin-form">
+                            <div class="form-group">
+                                <label>뽑기 활성화</label>
+                                <select id="gachaEnabled">
+                                    <option value="false">비활성</option>
+                                    <option value="true">활성</option>
+                                </select>
+                                <p style="margin-top:6px; color: var(--text-muted); font-size: 0.85rem;">
+                                    * 비활성 상태에서는 뽑기가 절대 진행되지 않습니다.
+                                </p>
+                            </div>
+                            <div class="form-group">
+                                <label>회차</label>
+                                <input type="number" id="gachaRoundNo" step="1" min="1" placeholder="예: 1">
+                            </div>
+                            <div class="form-group">
+                                <label>당첨 인원</label>
+                                <input type="number" id="gachaMaxWinners" step="1" min="1" placeholder="예: 3">
+                                <p style="margin-top:6px; color: var(--text-muted); font-size: 0.85rem;">
+                                    * 당첨 인원이 채워지면 해당 회차는 종료되고 더 이상 뽑을 수 없습니다.
+                                </p>
+                            </div>
                             <div class="form-group">
                                 <label>이벤트 활성화</label>
                                 <select id="gachaEventEnabled">
@@ -801,6 +840,36 @@
                             </div>
                             <button id="saveGachaEventBtn" class="btn-success full-width"><i class="fa-solid fa-wand-magic-sparkles"></i> 저장</button>
                             <div id="gachaEventStatusText" class="points-hint" style="margin-top:10px;">-</div>
+                        </div>
+                    </div>
+
+                    <div id="rootBulkPointsCard" class="points-card hidden" style="margin-top: 14px;">
+                        <div class="points-card-title">ROOT 전용: 전체 유저 포인트 일괄 지급/회수</div>
+                        <div class="points-admin-form">
+                            <div class="form-group">
+                                <label>지급/회수</label>
+                                <select id="rootBulkMode">
+                                    <option value="grant">지급 (+)</option>
+                                    <option value="withdraw">회수 (-)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>포인트</label>
+                                <input type="number" id="rootBulkAmount" step="1" min="1" placeholder="예: 100">
+                            </div>
+                            <div class="form-group">
+                                <label>사유(필수)</label>
+                                <input type="text" id="rootBulkReason" placeholder="예: 이벤트 보상 일괄 지급">
+                            </div>
+                            <div class="form-group">
+                                <label>대상</label>
+                                <select id="rootBulkTarget">
+                                    <option value="all">모든 계정(user_profiles)</option>
+                                    <option value="approved_only">포인트 승인된 계정만</option>
+                                </select>
+                            </div>
+                            <button id="rootBulkApplyBtn" class="btn-danger full-width"><i class="fa-solid fa-bolt"></i> 일괄 적용</button>
+                            <div id="rootBulkStatusText" class="points-hint" style="margin-top:10px;">-</div>
                         </div>
                     </div>
                 </div>
@@ -870,9 +939,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     
-    <script src="script.js?v=20260115-5"></script>
+    <script src="script.js?v=20260115-6"></script>
 </body>
 
 </html>
-
-

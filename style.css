@@ -654,6 +654,47 @@ input:focus, textarea:focus, select:focus {
     50% { opacity: 0.85; }
 }
 
+/* Gacha roll animation */
+.gacha-roll {
+    margin-top: 12px;
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(0,0,0,0.22);
+    padding: 14px;
+}
+.gacha-roll-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.gacha-roll-title {
+    font-weight: 900;
+    color: var(--text-main);
+}
+.gacha-roll-text {
+    color: var(--primary-light);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+}
+.gacha-roll-bar {
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.08);
+}
+.gacha-roll-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+    animation: gacha-roll-progress 1400ms ease-in-out infinite;
+}
+@keyframes gacha-roll-progress {
+    0% { width: 10%; opacity: 0.55; }
+    60% { width: 88%; opacity: 1; }
+    100% { width: 12%; opacity: 0.65; }
+}
+
 .streak-box {
     margin-top: 12px;
     padding: 12px 14px;
