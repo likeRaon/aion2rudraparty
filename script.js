@@ -7,7 +7,7 @@ const POST_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1NjU
 // 삭제 사유/오류 로그(감사용)
 const LOG_WEBHOOK_SECRET = 'aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQ1ODY4MjU4OTQ1MDg2NjY4OS9QazduSFUtRmlubTJGQmo1cTk3UF85YU5hNzhZU3ZTOGRaY2M4OGdQaVFTZ285RXhqOXU4aDQ1UlNpQ291QTJiUUVVRQ==';
 
-const DISCORD_POST_WEBHOOK_URL = atob(POST_WEBHOOK_SECRET);
+const DISCORD_POST_WEBHOOK_URL = 'https://discord.com/api/webhooks/1456559257078988821/5T73OUqYLgg1DaK5JI73Dv8Z_c7MVPbj6WRA4surCJZCVWIozOUhz_kX0aTGbJLwZBKF';
 const DISCORD_LOG_WEBHOOK_URL = atob(LOG_WEBHOOK_SECRET);
 
 // 뽑기 당첨 알림 (Discord 특정 채널 웹훅)
@@ -804,7 +804,7 @@ async function refreshGachaPanel(opts = {}) {
         if (elements.gachaResult) {
             if (!ctrl.gachaEnabled) {
                 elements.gachaResult.classList.remove('hidden');
-                elements.gachaResult.textContent = '현재 뽑기가 중단되었습니다. (ROOT 설정에서 재활성화 필요)';
+                elements.gachaResult.textContent = '현재 뽑기가 중단되었습니다. 다음 회차를 기대해 주세요! 🖐️';
                 elements.gachaResult.style.borderColor = 'rgba(239,68,68,0.55)';
                 elements.gachaResult.style.background = 'rgba(239,68,68,0.08)';
             } else if (elements.gachaResult.textContent.includes('중단되었습니다')) {
@@ -2700,6 +2700,8 @@ function safeAvatarUrl(url, nameForFallback = 'A') {
 function ingameAvatarUrl(charKey, serverId = 2002) {
     const ck = String(charKey || '').trim();
     if (!ck) return '';
+    // 인게임 아바타는 숫자 charKey만 사용
+    if (!/^\d+$/.test(ck)) return '';
     return `https://profileimg.plaync.com/game_profile_images/aion2/images?gameServerKey=${encodeURIComponent(String(serverId))}&charKey=${encodeURIComponent(ck)}`;
 }
 
