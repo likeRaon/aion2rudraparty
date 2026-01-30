@@ -2288,10 +2288,8 @@ function setupEventListeners() {
         });
     });
 
-    elements.roleFilter.addEventListener('change', renderPosts);
-    if (elements.categoryFilter) {
-        elements.categoryFilter.addEventListener('change', renderPosts);
-    }
+    if (elements.roleFilter) elements.roleFilter.addEventListener('change', renderPosts);
+    if (elements.categoryFilter) elements.categoryFilter.addEventListener('change', renderPosts);
 
     elements.loginBtn.addEventListener('click', () => {
         // 기본은 로그인 탭
@@ -3777,7 +3775,7 @@ function updateUserUI() {
                 refreshPointsHeader().catch(() => {});
             });
         } else {
-            if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '포인트(pt)';
+            if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '승인필요';
         }
     } else {
         elements.loginBtn.classList.remove('hidden');
@@ -4477,7 +4475,7 @@ function renderPosts() {
         }
     });
     
-    const filterRole = elements.roleFilter.value;
+    const filterRole = elements.roleFilter ? elements.roleFilter.value : 'all';
     if (filterRole !== 'all') {
         filteredPosts = filteredPosts.filter(post => {
             const postRoles = Array.isArray(post.roles) ? post.roles : [];
