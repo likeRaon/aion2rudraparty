@@ -218,6 +218,17 @@
                         <p style="font-size: 0.8rem; color: var(--text-sub); margin-top: 5px;">* 비회원 작성 시에만 필요합니다.</p>
                     </div>
 
+                    <div class="form-group" id="expirationGroup">
+                        <label>게시글 유효 기간</label>
+                        <select id="postExpiration">
+                            <option value="1">1시간</option>
+                            <option value="3" selected>3시간 (기본)</option>
+                            <option value="6">6시간</option>
+                            <option value="24">24시간</option>
+                            <option value="0">삭제 전까지</option>
+                        </select>
+                    </div>
+
                     <button type="submit" id="submitPostBtn" class="btn-primary full-width">등록하기</button>
                 </form>
             </div>
@@ -308,10 +319,11 @@
                         </p>
                     </div>
                     
-                    <!-- 파티원 목록 영역 -->
+                    <!-- 파티원 목록 영역 (현재 사용 안함)
                     <div class="form-group">
                          <div id="detailPartyListContainer"></div>
                     </div>
+                    -->
                 </div>
                 
                 <div style="margin-top:20px; text-align:center;">
@@ -858,7 +870,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
     
-    <script src="script.min.js?v=20260116-8"></script>
+    <script src="script.min.js?v=20260116-11"></script>
 </body>
 
 </html>

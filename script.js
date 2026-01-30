@@ -3444,7 +3444,7 @@ function openWriteModal(isNotice, editPost = null) {
         if (elements.roleGroup) elements.roleGroup.classList.add('hidden');
         if (elements.linkGroup) elements.linkGroup.classList.add('hidden');
         if (elements.dpsGroup) elements.dpsGroup.classList.add('hidden');
-        if (elements.expirationGroup) elements.expirationGroup.classList.add('hidden');
+        if (elements.expirationGroup) elements.expirationGroup.classList.remove('hidden');
         if (elements.postCategory) elements.postCategory.removeAttribute('required');
 
         if (elements.guestNameGroup) elements.guestNameGroup.classList.toggle('hidden', !isGuest);
@@ -3790,7 +3790,7 @@ function updateUserUI() {
     }
 }
 
-function handlePostSubmit(e) {
+async function handlePostSubmit(e) {
     e.preventDefault();
     
     if (!db) {
@@ -3805,12 +3805,19 @@ function handlePostSubmit(e) {
     let postType = currentTab;
     if (currentTab === 'completed') postType = 'party';
 
+    let expirationMs = 0;
     if (isNoticeWritingMode) {
         // 공지 작성 데이터 처리
         postType = 'notice';
         // 공지는 필수 필드 최소화
     } else {
         // 일반 글쓰기 데이터 처리(로그인 없이 작성 가능)
+        const expirationHours = parseInt(elements.postExpiration?.value || '3', 10);
+        if (expirationHours > 0) {
+            expirationMs = expirationHours * 60 * 60 * 1000;
+        } else {
+            expirationMs = 0; // 삭제 전까지
+        }
         if (isGuest) {
             if (!guestName) {
                 alert('게임 닉네임을 입력해주세요.');
@@ -3823,6 +3830,11 @@ function handlePostSubmit(e) {
         }
     }
 
+    let guestProfile = null;
+    if (!isNoticeWritingMode && isGuest) {
+        guestProfile = await fetchCharacterData(guestName).catch(() => null);
+    }
+
     const postData = {
         title: elements.postTitle.value,
         content: elements.postContent.value,
@@ -3832,28 +3844,29 @@ function handlePostSubmit(e) {
     if (!isEditMode) {
         postData.type = postType;
         postData.createdAt = new Date().toISOString();
-        postData.expirationTime = isNoticeWritingMode ? 0 : (3 * 60 * 60 * 1000);
+        postData.expirationTime = isNoticeWritingMode ? 0 : expirationMs;
         postData.status = 'recruiting';
         if (isGuest) {
+            const gp = guestProfile || {};
             postData.authorUid = null;
             postData.password = guestPassword;
             postData.members = [{
-                name: guestName,
-                class: null,
+                name: gp.name || guestName,
+                class: gp.class || null,
                 dps: 0,
-                itemLevel: null,
-                charKey: null,
-                avatar: null,
+                itemLevel: gp.item_level || gp.itemLevel || null,
+                charKey: gp.charKey || null,
+                avatar: gp.profile_img || null,
                 isLeader: true
             }];
             postData.author = {
-                name: guestName,
-                class: null,
-                level: null,
-                itemLevel: null,
+                name: gp.name || guestName,
+                class: gp.class || null,
+                level: gp.level || null,
+                itemLevel: gp.item_level || gp.itemLevel || null,
                 dps: 0,
-                charKey: null,
-                avatar: null,
+                charKey: gp.charKey || null,
+                avatar: gp.profile_img || null,
                 verified: false,
                 uid: null
             };
@@ -4445,7 +4458,7 @@ function renderPosts() {
                     <div style="font-size:0.8rem; color:#666; margin-top:5px;">클릭하여 상세 정보 보기</div>
                 </div>
                 <div style="padding:10px; text-align:center;">
-                    ${canManagePost(post) ? `<button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width">관리</button>` : ''}
+                    <button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width">관리</button>
                 </div>
             `;
             
@@ -4455,6 +4468,7 @@ function renderPosts() {
                     ? `<span class="type-badge party"><i class="fa-solid fa-users"></i> 파티원 구해요</span>`
                     : `<span class="type-badge member"><i class="fa-solid fa-user-plus"></i> 파티 구해요</span>`)
                 : '';
+            const authorClassLabel = post.author.class ? `${post.author.class} ` : '';
 
             card.innerHTML = `
                 <div class="post-header">
@@ -4475,7 +4489,7 @@ function renderPosts() {
                         <div class="author-detail">
                             <div class="author-name">${post.author.name}</div>
                             <div class="author-meta">
-                                ${post.author.class} 
+                                ${authorClassLabel}
                                 ${dpsDisplay}
                                 <span style="margin-left:4px;">(Lv.${itemLevelDisplay})</span>
                             </div>
@@ -4484,7 +4498,7 @@ function renderPosts() {
                 </div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
                     ${post.link ? `<button onclick="event.stopPropagation(); window.open('${post.link}')" class="btn-primary full-width" style="padding: 8px;">참여</button>` : ''}
-                    ${canManagePost(post) ? `<button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width" style="padding: 8px;">관리</button>` : ''}
+                    <button onclick="event.stopPropagation(); checkPasswordAndManage('${post.id}')" class="btn-outline full-width" style="padding: 8px;">관리</button>
                 </div>
             `;
         }
@@ -4546,7 +4560,7 @@ function renderDetailPartyList(post) {
         authorAvatar.src = avatarUrlFromCharKeyOrFallback(post.author.charKey, post.author.avatar, post.author.name);
         authorAvatar.onerror = () => { authorAvatar.src = defaultAvatarDataUri('U'); };
         authorName.textContent = post.author.name;
-        authorClass.textContent = post.author.class;
+        authorClass.textContent = post.author.class || '';
         authorItemLevel.textContent = (post.author.itemLevel || 0).toLocaleString();
         
         // 작성자 클릭 시 아툴 이동
@@ -4593,18 +4607,12 @@ window.checkPasswordAndManage = function(postId) {
     const post = posts.find(p => p.id === postId);
     if (!post) return;
 
-    if (!currentUser) {
-        alert('관리 기능은 로그인(닉네임 설정) 후 사용 가능합니다.');
-        elements.authModal.classList.remove('hidden');
-        return;
-    }
-
-    if (currentUser.isAdmin) {
+    if (currentUser?.isAdmin) {
         openManageModal(post);
         return;
     }
 
-    if (canManagePost(post)) {
+    if (currentUser && canManagePost(post)) {
         openManageModal(post);
         return;
     }
