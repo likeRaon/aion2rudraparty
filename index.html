@@ -197,74 +197,6 @@
                     </div>
 
                     <!-- 콘텐츠 선택 -->
-                    <div class="form-group" id="categoryGroup">
-                        <label>콘텐츠 종류</label>
-                        <select id="postCategory" required>
-                            <option value="">선택해 주세요.</option>
-                            <option value="정복">정복</option>
-                            <option value="성역">성역</option>
-                            <option value="초월">초월</option>
-                            <option value="토벌전">토벌전</option>
-                            <option value="PVE (닥사)">PVE (닥사)</option>
-                            <option value="PVP">PVP</option>
-                        </select>
-                    </div>
-
-                    <!-- 세부 내용 및 난이도 -->
-                    <div id="detailSelectGroup" class="form-group hidden">
-                        <label>세부 내용 / 난이도</label>
-                        <div style="display: flex; gap: 10px;">
-                            <select id="postDetail" style="flex: 1;">
-                                <option value="">선택</option>
-                            </select>
-                            <select id="postDifficulty" style="flex: 1;">
-                                <option value="">난이도</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="form-group" id="roleGroup">
-                        <label>모집/지원 직업 (다중 선택 가능)</label>
-                        <div class="checkbox-group">
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="무관" id="role_any">
-                                <label for="role_any">무관</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="수호성" id="role_tempular">
-                                <label for="role_tempular">수호성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="검성" id="role_gladiator">
-                                <label for="role_gladiator">검성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="살성" id="role_assassin">
-                                <label for="role_assassin">살성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="궁성" id="role_ranger">
-                                <label for="role_ranger">궁성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="마도성" id="role_sorcerer">
-                                <label for="role_sorcerer">마도성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="정령성" id="role_spirit">
-                                <label for="role_spirit">정령성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="치유성" id="role_cleric">
-                                <label for="role_cleric">치유성</label>
-                            </div>
-                            <div class="checkbox-item">
-                                <input type="checkbox" name="postRole" value="호법성" id="role_chanter">
-                                <label for="role_chanter">호법성</label>
-                            </div>
-                        </div>
-                    </div>
-
                     <div class="form-group">
                         <label>제목</label>
                         <input type="text" id="postTitle" required placeholder="예: 초월 3단계 가실분">
@@ -275,27 +207,15 @@
                         <textarea id="postContent" required placeholder="출발 시간 혹은 기타 특이 사항 작성"></textarea>
                     </div>
                     
-                    <div class="form-group" id="linkGroup">
-                        <label>오픈채팅/디스코드 링크 (선택)</label>
-                        <input type="url" id="postLink" placeholder="https://open.kakao.com/...">
+                    <div class="form-group" id="guestNameGroup">
+                        <label>게임 닉네임 (비회원 작성)</label>
+                        <input type="text" id="postGuestName" placeholder="예: 캐릭터닉네임">
                     </div>
 
-                    <div class="form-group" id="dpsGroup">
-                        <label>아툴 DPS 점수 (선택)</label>
-                        <input type="number" id="postMyDps" placeholder="예: 28500 (숫자만 입력)" style="font-family: 'Cafe24SsurroundAir';">
-                    </div>
-
-                    <div class="form-group" id="expirationGroup">
-                        <label>게시글 유효 기간 (자동 삭제)</label>
-                        <select id="postExpiration">
-                            <option value="1">1시간</option>
-                            <option value="3" selected>3시간 (기본)</option>
-                            <option value="6">6시간</option>
-                            <option value="12">12시간</option>
-                            <option value="24">24시간</option>
-                            <option value="0">유지 (자동 삭제 안 함)</option>
-                        </select>
-                        <p style="font-size: 0.8rem; color: var(--text-sub);">* 설정한 시간이 지나면 게시글이 자동으로 삭제됩니다.</p>
+                    <div class="form-group" id="guestPasswordGroup">
+                        <label>게시글 비밀번호 (비회원 수정/삭제용)</label>
+                        <input type="password" id="postGuestPassword" placeholder="4자리 이상" minlength="4">
+                        <p style="font-size: 0.8rem; color: var(--text-sub); margin-top: 5px;">* 비회원 작성 시에만 필요합니다.</p>
                     </div>
 
                     <button type="submit" id="submitPostBtn" class="btn-primary full-width">등록하기</button>
@@ -536,11 +456,11 @@
                 <button class="close-btn guide-close">&times;</button>
             </div>
             <div class="modal-body" style="line-height: 1.8; color: var(--text-sub);">
-                <p><strong>1. 로그인 (닉네임 설정)</strong></p>
-                <p>우측 상단의 '로그인' 버튼을 눌러 본인의 게임 닉네임을 입력하세요. 브라우저에 저장되어 재방문 시 유지됩니다.</p>
+                <p><strong>1. 로그인 (관리자 전용)</strong></p>
+                <p>로그인은 관리자 전용 기능입니다. 일반 유저는 로그인하지 않아도 게시글을 작성할 수 있습니다.</p>
                 
                 <p style="margin-top: 15px;"><strong>2. 글쓰기 & 관리</strong></p>
-                <p>파티 모집 또는 구직 글은 로그인 후 작성할 수 있습니다. 내가 쓴 글에는 <strong>[관리]</strong> 버튼이 보이며, 모집 상태 변경/파티원 관리가 가능합니다.</p>
+                <p>파티 모집 또는 구직 글은 로그인 없이도 작성할 수 있습니다. 비회원 작성 시 닉네임과 비밀번호(4자리 이상)를 입력하면 수정/삭제가 가능합니다.</p>
                 
                 <p style="margin-top: 15px;"><strong>3. 디스코드 알림 & 자동 삭제</strong></p>
                 <p>글이 등록되면 디스코드에 알림이 갑니다. <strong>등록 후 3시간</strong>이 지나면 게시글과 디스코드 알림이 <strong>자동으로 삭제</strong>됩니다.</p>
@@ -938,7 +858,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
     
-    <script src="script.min.js?v=20260116-6"></script>
+    <script src="script.min.js?v=20260116-7"></script>
 </body>
 
 </html>

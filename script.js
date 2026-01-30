@@ -2036,6 +2036,10 @@ const elements = {
     linkGroup: document.getElementById('linkGroup'),
     dpsGroup: document.getElementById('dpsGroup'),
     expirationGroup: document.getElementById('expirationGroup'),
+    guestNameGroup: document.getElementById('guestNameGroup'),
+    guestPasswordGroup: document.getElementById('guestPasswordGroup'),
+    postGuestName: document.getElementById('postGuestName'),
+    postGuestPassword: document.getElementById('postGuestPassword'),
     authModal: document.getElementById('authModal'),
     authCloseBtn: document.querySelector('.auth-close'),
     authForm: document.getElementById('authForm'),
@@ -3375,9 +3379,13 @@ function recommendStatsForTargetScore() {
 
 // 글쓰기 모달 열기
 function openWriteModal(isNotice, editPost = null) {
-    if (!currentUser) {
-        alert('로그인 후 이용 가능합니다.');
+    if (isNotice && !currentUser) {
+        alert('공지사항 작성은 관리자 로그인 후 이용 가능합니다.');
         elements.authModal.classList.remove('hidden');
+        return;
+    }
+    if (isNotice && !currentUser.isAdmin) {
+        alert('공지사항 작성은 관리자만 가능합니다.');
         return;
     }
 
@@ -3387,11 +3395,11 @@ function openWriteModal(isNotice, editPost = null) {
 
     elements.writeModal.classList.remove('hidden');
     elements.postForm.reset();
-    elements.detailSelectGroup.classList.add('hidden');
-    elements.postDetail.innerHTML = '<option value="">선택</option>';
-    elements.postDifficulty.innerHTML = '<option value="">난이도</option>';
+    if (elements.detailSelectGroup) elements.detailSelectGroup.classList.add('hidden');
+    if (elements.postDetail) elements.postDetail.innerHTML = '<option value="">선택</option>';
+    if (elements.postDifficulty) elements.postDifficulty.innerHTML = '<option value="">난이도</option>';
 
-    if (currentUser.dps) {
+    if (currentUser?.dps && elements.postMyDps) {
         elements.postMyDps.value = currentUser.dps;
     }
 
@@ -3405,24 +3413,32 @@ function openWriteModal(isNotice, editPost = null) {
         elements.modalTitle.textContent = isNotice ? '공지사항 작성' : '파티 모집글 작성';
     }
 
+    const isGuest = !currentUser;
     if (isNotice) {
         // 공지 작성/수정 모드
-        elements.noticeMessage.classList.remove('hidden');
-        elements.categoryGroup.classList.add('hidden');
-        elements.roleGroup.classList.add('hidden');
-        elements.linkGroup.classList.add('hidden');
-        elements.dpsGroup.classList.add('hidden');
-        elements.expirationGroup.classList.add('hidden');
-        elements.postCategory.removeAttribute('required');
+        if (elements.noticeMessage) elements.noticeMessage.classList.remove('hidden');
+        if (elements.categoryGroup) elements.categoryGroup.classList.add('hidden');
+        if (elements.roleGroup) elements.roleGroup.classList.add('hidden');
+        if (elements.linkGroup) elements.linkGroup.classList.add('hidden');
+        if (elements.dpsGroup) elements.dpsGroup.classList.add('hidden');
+        if (elements.expirationGroup) elements.expirationGroup.classList.add('hidden');
+        if (elements.guestNameGroup) elements.guestNameGroup.classList.add('hidden');
+        if (elements.guestPasswordGroup) elements.guestPasswordGroup.classList.add('hidden');
+        if (elements.postCategory) elements.postCategory.removeAttribute('required');
     } else {
         // 일반 작성 모드
-        elements.noticeMessage.classList.add('hidden');
-        elements.categoryGroup.classList.remove('hidden');
-        elements.roleGroup.classList.remove('hidden');
-        elements.linkGroup.classList.remove('hidden');
-        elements.dpsGroup.classList.remove('hidden');
-        elements.expirationGroup.classList.remove('hidden');
-        elements.postCategory.setAttribute('required', 'true');
+        if (elements.noticeMessage) elements.noticeMessage.classList.add('hidden');
+        if (elements.categoryGroup) elements.categoryGroup.classList.add('hidden');
+        if (elements.roleGroup) elements.roleGroup.classList.add('hidden');
+        if (elements.linkGroup) elements.linkGroup.classList.add('hidden');
+        if (elements.dpsGroup) elements.dpsGroup.classList.add('hidden');
+        if (elements.expirationGroup) elements.expirationGroup.classList.add('hidden');
+        if (elements.postCategory) elements.postCategory.removeAttribute('required');
+
+        if (elements.guestNameGroup) elements.guestNameGroup.classList.toggle('hidden', !isGuest);
+        if (elements.guestPasswordGroup) elements.guestPasswordGroup.classList.toggle('hidden', !isGuest);
+        if (elements.postGuestName) elements.postGuestName.value = '';
+        if (elements.postGuestPassword) elements.postGuestPassword.value = '';
     }
 }
 
@@ -3453,7 +3469,7 @@ function setAuthMode(mode) {
     if (elements.authHelpText) {
         elements.authHelpText.innerHTML = isSignup
             ? '회원가입 후 닉네임은 <b>변경할 수 없습니다</b>.<br>포인트 기능은 <b>관리자 승인</b> 후 사용할 수 있습니다.'
-            : '아이디/비밀번호로 로그인합니다.';
+            : '관리자 전용 로그인입니다.<br>일반 유저는 로그인하지 않아도 게시글을 작성할 수 있습니다.';
     }
     // 비밀번호 자동완성 힌트
     if (elements.authPassword) {
@@ -3770,51 +3786,31 @@ function handlePostSubmit(e) {
         return;
     }
 
+    const isGuest = !currentUser;
+    const guestName = elements.postGuestName?.value?.trim() || '';
+    const guestPassword = elements.postGuestPassword?.value || '';
+
     let postType = currentTab;
     if (currentTab === 'completed') postType = 'party';
-
-    let category = '';
-    let detail = '';
-    let difficulty = '';
-    let selectedRoles = [];
-    let myDps = 0;
-    let expirationMs = 0;
-    let link = '';
 
     if (isNoticeWritingMode) {
         // 공지 작성 데이터 처리
         postType = 'notice';
-        expirationMs = 0; // 공지사항은 영구 보존 (자동 삭제 안 함)
         // 공지는 필수 필드 최소화
     } else {
-        // 일반 글쓰기 데이터 처리
-        selectedRoles = Array.from(elements.postRoleCheckboxes)
-            .filter(cb => cb.checked)
-            .map(cb => cb.value);
-
-        if (selectedRoles.length === 0) {
-            alert('최소 1개 이상의 직업을 선택해주세요.');
-            return;
+        // 일반 글쓰기 데이터 처리(로그인 없이 작성 가능)
+        if (isGuest) {
+            if (!guestName) {
+                alert('게임 닉네임을 입력해주세요.');
+                return;
+            }
+            if (!guestPassword || guestPassword.length < 4) {
+                alert('게시글 비밀번호를 4자리 이상 입력해주세요.');
+                return;
+            }
         }
-
-        const myDpsInput = document.getElementById('postMyDps').value;
-        myDps = myDpsInput ? parseInt(myDpsInput) : 0;
-
-        const expirationHours = parseInt(elements.postExpiration.value);
-        if (expirationHours > 0) {
-            expirationMs = expirationHours * 60 * 60 * 1000;
-        }
-
-        category = elements.postCategory.value;
-        detail = elements.postDetail.value;
-        difficulty = elements.postDifficulty.value;
-        link = document.getElementById('postLink').value;
     }
 
-    if (!isEditMode) {
-        currentUser.dps = myDps;
-    }
-    
     const postData = {
         title: elements.postTitle.value,
         content: elements.postContent.value,
@@ -3823,36 +3819,56 @@ function handlePostSubmit(e) {
     // 새로 작성할 때만 들어가는 필드
     if (!isEditMode) {
         postData.type = postType;
-        postData.category = category;
-        postData.categoryDetail = detail;
-        postData.difficulty = difficulty;
-        postData.roles = selectedRoles;
-        postData.link = link;
         postData.createdAt = new Date().toISOString();
-        postData.expirationTime = expirationMs;
+        postData.expirationTime = isNoticeWritingMode ? 0 : (3 * 60 * 60 * 1000);
         postData.status = 'recruiting';
-        postData.authorUid = currentUser.uid || null;
-        postData.members = [{
-            name: currentUser.name,
-            class: currentUser.class,
-            dps: myDps, 
-            itemLevel: currentUser.itemLevel,
-            charKey: currentUser.charKey || null,
-            avatar: currentUser.avatar,
-            isLeader: true
-        }];
-        // Firestore 저장용 author 객체는 최소 정보만 포함 (uid 포함)
-        postData.author = {
-            name: currentUser.name,
-            class: currentUser.class,
-            level: currentUser.level,
-            itemLevel: currentUser.itemLevel,
-            dps: myDps,
-            charKey: currentUser.charKey || null,
-            avatar: currentUser.avatar,
-            verified: !!currentUser.verified,
-            uid: currentUser.uid || null
-        };
+        if (isGuest) {
+            postData.authorUid = null;
+            postData.password = guestPassword;
+            postData.members = [{
+                name: guestName,
+                class: null,
+                dps: 0,
+                itemLevel: null,
+                charKey: null,
+                avatar: null,
+                isLeader: true
+            }];
+            postData.author = {
+                name: guestName,
+                class: null,
+                level: null,
+                itemLevel: null,
+                dps: 0,
+                charKey: null,
+                avatar: null,
+                verified: false,
+                uid: null
+            };
+        } else {
+            postData.authorUid = currentUser.uid || null;
+            postData.members = [{
+                name: currentUser.name,
+                class: currentUser.class,
+                dps: currentUser.dps || 0,
+                itemLevel: currentUser.itemLevel,
+                charKey: currentUser.charKey || null,
+                avatar: currentUser.avatar,
+                isLeader: true
+            }];
+            // Firestore 저장용 author 객체는 최소 정보만 포함 (uid 포함)
+            postData.author = {
+                name: currentUser.name,
+                class: currentUser.class,
+                level: currentUser.level,
+                itemLevel: currentUser.itemLevel,
+                dps: currentUser.dps || 0,
+                charKey: currentUser.charKey || null,
+                avatar: currentUser.avatar,
+                verified: !!currentUser.verified,
+                uid: currentUser.uid || null
+            };
+        }
     } else {
         // 공지사항이면 expirationTime은 항상 0으로 유지
         if (editingPostData && editingPostData.type === 'notice') {
@@ -3886,11 +3902,13 @@ function handlePostSubmit(e) {
                     showToast(`<i class="fa-solid fa-check"></i> 등록되었습니다.`);
 
                     // 파티원 구해요/파티 구해요 글 작성 시 +10 (일/주 제한 KST 기준)
-                    try {
-                        await ensurePointDocsForCurrentUser();
-                        await awardPostCreatePoints(postData.type, docRef?.id);
-                    } catch (e) {
-                        console.error(e);
+                    if (currentUser?.uid) {
+                        try {
+                            await ensurePointDocsForCurrentUser();
+                            await awardPostCreatePoints(postData.type, docRef?.id);
+                        } catch (e) {
+                            console.error(e);
+                        }
                     }
                 })
                 .catch((error) => {
@@ -3915,15 +3933,14 @@ function sendDiscordNotification(post) {
         typeText = '공지사항';
     }
 
-    let categoryText = '기타';
-    if (post.category) {
-        categoryText = post.category;
-        if (post.categoryDetail) categoryText += ` - ${post.categoryDetail}`;
-        if (post.difficulty) categoryText += ` (${post.difficulty})`;
-    }
+    let categoryText = post.category || '';
+    if (post.categoryDetail) categoryText += ` - ${post.categoryDetail}`;
+    if (post.difficulty) categoryText += ` (${post.difficulty})`;
 
-    let authorText = `${post.author.name} (${post.author.class})`;
-    if (post.type === 'member' && post.author.dps > 0) {
+    const authorName = post?.author?.name || '작성자';
+    const authorClass = post?.author?.class ? ` (${post.author.class})` : '';
+    let authorText = `${authorName}${authorClass}`;
+    if (post.type === 'member' && post.author?.dps > 0) {
         authorText += ` / DPS ${post.author.dps.toLocaleString()}`;
     }
 
@@ -3932,8 +3949,10 @@ function sendDiscordNotification(post) {
     
     description += `👤 **작성자:** ${authorText}\n`;
     if (post.type !== 'notice') {
-        description += `🎮 **콘텐츠:** ${categoryText}\n`;
-        description += `🎯 **대상:** ${post.roles.join(', ')}`;
+        if (categoryText) description += `🎮 **콘텐츠:** ${categoryText}\n`;
+        if (Array.isArray(post.roles) && post.roles.length) {
+            description += `🎯 **대상:** ${post.roles.join(', ')}`;
+        }
     }
 
     if (post.link) {
@@ -4342,7 +4361,8 @@ function renderPosts() {
     const filterRole = elements.roleFilter.value;
     if (filterRole !== 'all') {
         filteredPosts = filteredPosts.filter(post => {
-            const postRoles = Array.isArray(post.roles) ? post.roles : [post.role];
+            const postRoles = Array.isArray(post.roles) ? post.roles : [];
+            if (!postRoles.length) return true;
             if (postRoles.includes('무관')) return true;
             if (filterRole === 'tank' && (postRoles.includes('수호성') || postRoles.includes('검성'))) return true;
             if (filterRole === 'dps' && (postRoles.includes('살성') || postRoles.includes('궁성') || postRoles.includes('마도성') || postRoles.includes('정령성'))) return true;
@@ -4365,7 +4385,7 @@ function renderPosts() {
         const timeString = new Date(post.createdAt).toLocaleDateString() + ' ' + 
                           new Date(post.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
         
-        const roles = Array.isArray(post.roles) ? post.roles : [post.role];
+        const roles = (Array.isArray(post.roles) ? post.roles : []).filter(Boolean);
         const rolesHtml = roles.map(r => `<span class="role-badge">${r}</span>`).join(' ');
         
         const statusHtml = post.status === 'full' 
@@ -4484,7 +4504,7 @@ function showPostDetail(postId) {
         renderDetailPartyList(post);
     }
 
-    const roles = Array.isArray(post.roles) ? post.roles : [post.role];
+    const roles = (Array.isArray(post.roles) ? post.roles : []).filter(Boolean);
     elements.detailRoles.innerHTML = post.type === 'notice' ? '' : roles.map(r => `<span class="role-badge">${r}</span>`).join(' ');
     
     elements.detailTitle.textContent = post.title;
@@ -4572,12 +4592,22 @@ window.checkPasswordAndManage = function(postId) {
         return;
     }
 
-    if (!canManagePost(post)) {
-        alert('작성자 본인(동일 닉네임)만 관리할 수 있습니다.');
+    if (canManagePost(post)) {
+        openManageModal(post);
         return;
     }
 
-    openManageModal(post);
+    if (post.password) {
+        const inputPwd = prompt('게시글 비밀번호를 입력하세요:');
+        if (inputPwd === post.password) {
+            openManageModal(post);
+        } else {
+            alert('비밀번호가 일치하지 않습니다.');
+        }
+        return;
+    }
+
+    alert('작성자 본인만 관리할 수 있습니다.');
 }
 
 function openManageModal(post) {
