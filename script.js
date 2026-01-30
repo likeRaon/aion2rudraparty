@@ -2371,79 +2371,91 @@ function setupEventListeners() {
     if (elements.clearImportBtn) elements.clearImportBtn.addEventListener('click', () => { if (elements.importJsonText) elements.importJsonText.value = ''; });
 
     // 일반 글쓰기 버튼
-    elements.writeBtn.addEventListener('click', () => {
-        openWriteModal(false);
-    });
-
-    // 공지 작성 버튼 (관리자용)
-    elements.writeNoticeBtn.addEventListener('click', () => {
-        openWriteModal(true);
-    });
-
-    elements.writeCloseBtn.addEventListener('click', () => {
-        elements.writeModal.classList.add('hidden');
-    });
-
-    elements.postCategory.addEventListener('change', (e) => {
-        const category = e.target.value;
-        const data = categoryData[category];
-        
-        if (!data) {
-            elements.detailSelectGroup.classList.add('hidden');
-            return;
-        }
-
-        elements.detailSelectGroup.classList.remove('hidden');
-        
-        elements.postDetail.innerHTML = '';
-        data.details.forEach(item => {
-            const option = document.createElement('option');
-            option.value = item;
-            option.textContent = item;
-            elements.postDetail.appendChild(option);
-        });
-
-        elements.postDifficulty.innerHTML = '';
-        if (data.difficulties.length > 0) {
-            elements.postDifficulty.style.display = 'block';
-            data.difficulties.forEach(item => {
-                const option = document.createElement('option');
-                option.value = item;
-                option.textContent = item;
-                elements.postDifficulty.appendChild(option);
-            });
-        } else {
-            elements.postDifficulty.style.display = 'none';
-        }
-    });
-
-    const roleAny = document.getElementById('role_any');
-    const otherRoles = Array.from(elements.postRoleCheckboxes).filter(cb => cb.value !== '무관');
-
-    if (roleAny) {
-        roleAny.addEventListener('change', () => {
-            if (roleAny.checked) otherRoles.forEach(cb => cb.checked = false);
+    if (elements.writeBtn) {
+        elements.writeBtn.addEventListener('click', () => {
+            openWriteModal(false);
         });
     }
 
-    otherRoles.forEach(cb => {
-        cb.addEventListener('change', () => {
-            if (cb.checked && roleAny) roleAny.checked = false;
+    // 공지 작성 버튼 (관리자용)
+    if (elements.writeNoticeBtn) {
+        elements.writeNoticeBtn.addEventListener('click', () => {
+            openWriteModal(true);
         });
-    });
+    }
 
-    elements.postForm.addEventListener('submit', handlePostSubmit);
+    if (elements.writeCloseBtn) {
+        elements.writeCloseBtn.addEventListener('click', () => {
+            elements.writeModal.classList.add('hidden');
+        });
+    }
 
-    elements.manageCloseBtn.addEventListener('click', () => {
-        elements.manageModal.classList.add('hidden');
-        currentEditingPostId = null;
-    });
+    if (elements.postCategory && elements.detailSelectGroup && elements.postDetail && elements.postDifficulty) {
+        elements.postCategory.addEventListener('change', (e) => {
+            const category = e.target.value;
+            const data = categoryData[category];
+            
+            if (!data) {
+                elements.detailSelectGroup.classList.add('hidden');
+                return;
+            }
 
-    elements.btnStatusRecruiting.addEventListener('click', () => updatePostStatus('recruiting'));
-    elements.btnStatusFull.addEventListener('click', () => updatePostStatus('full'));
+            elements.detailSelectGroup.classList.remove('hidden');
+            
+            elements.postDetail.innerHTML = '';
+            data.details.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                elements.postDetail.appendChild(option);
+            });
+
+            elements.postDifficulty.innerHTML = '';
+            if (data.difficulties.length > 0) {
+                elements.postDifficulty.style.display = 'block';
+                data.difficulties.forEach(item => {
+                    const option = document.createElement('option');
+                    option.value = item;
+                    option.textContent = item;
+                    elements.postDifficulty.appendChild(option);
+                });
+            } else {
+                elements.postDifficulty.style.display = 'none';
+            }
+        });
+    }
+
+    if (elements.postRoleCheckboxes && elements.postRoleCheckboxes.length) {
+        const roleAny = document.getElementById('role_any');
+        const otherRoles = Array.from(elements.postRoleCheckboxes).filter(cb => cb.value !== '무관');
+
+        if (roleAny) {
+            roleAny.addEventListener('change', () => {
+                if (roleAny.checked) otherRoles.forEach(cb => cb.checked = false);
+            });
+        }
+
+        otherRoles.forEach(cb => {
+            cb.addEventListener('change', () => {
+                if (cb.checked && roleAny) roleAny.checked = false;
+            });
+        });
+    }
+
+    if (elements.postForm) elements.postForm.addEventListener('submit', handlePostSubmit);
+
+    if (elements.manageCloseBtn) {
+        elements.manageCloseBtn.addEventListener('click', () => {
+            elements.manageModal.classList.add('hidden');
+            currentEditingPostId = null;
+        });
+    }
+
+    if (elements.btnStatusRecruiting) elements.btnStatusRecruiting.addEventListener('click', () => updatePostStatus('recruiting'));
+    if (elements.btnStatusFull) elements.btnStatusFull.addEventListener('click', () => updatePostStatus('full'));
     
-    elements.addMemberBtn.addEventListener('click', addPartyMember);
-    elements.deletePostBtn.addEventListener('click', deletePost);
+    if (elements.addMemberBtn) elements.addMemberBtn.addEventListener('click', addPartyMember);
+    if (elements.deletePostBtn) elements.deletePostBtn.addEventListener('click', deletePost);
 
     elements.detailCloseBtn.addEventListener('click', () => {
         elements.detailModal.classList.add('hidden');
