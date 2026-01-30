@@ -3777,7 +3777,7 @@ function updateUserUI() {
                 refreshPointsHeader().catch(() => {});
             });
         } else {
-            if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '승인필요';
+            if (elements.pointsBalanceText) elements.pointsBalanceText.textContent = '포인트(pt)';
         }
     } else {
         elements.loginBtn.classList.remove('hidden');
