@@ -1728,6 +1728,8 @@ let currentTab = 'all';
 let posts = [];
 let currentUser = null;
 let currentEditingPostId = null;
+const unlockedPostIds = new Set();
+let isSubmittingPost = false;
 let isNoticeWritingMode = false; 
 let isEditMode = false; // 글 수정 모드 여부
 let editingPostData = null; // 수정 중인 글 데이터
@@ -3801,6 +3803,14 @@ async function handlePostSubmit(e) {
         alert("데이터베이스 연결 설정이 필요합니다.");
         return;
     }
+    if (isSubmittingPost) return;
+    isSubmittingPost = true;
+    const submitBtn = elements.submitPostBtn;
+    const prevSubmitText = submitBtn ? submitBtn.textContent : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '등록 중...';
+    }
 
     const isGuest = !currentUser;
     const guestName = elements.postGuestName?.value?.trim() || '';
@@ -3837,6 +3847,18 @@ async function handlePostSubmit(e) {
     let guestProfile = null;
     if (!isNoticeWritingMode && isGuest) {
         guestProfile = await fetchCharacterData(guestName).catch(() => null);
+    }
+    if (!isNoticeWritingMode && !isGuest && currentUser?.name) {
+        const needRefresh = !currentUser.class || !currentUser.itemLevel || !currentUser.avatar || !currentUser.charKey;
+        if (needRefresh) {
+            const data = await fetchCharacterData(currentUser.name).catch(() => null);
+            if (data) {
+                currentUser.class = data.class || currentUser.class;
+                currentUser.itemLevel = data.item_level || currentUser.itemLevel;
+                currentUser.avatar = data.profile_img || currentUser.avatar;
+                currentUser.charKey = data.charKey || currentUser.charKey;
+            }
+        }
     }
 
     const postData = {
@@ -3905,46 +3927,42 @@ async function handlePostSubmit(e) {
         }
     }
     
-    if (isEditMode && editingPostData) {
-        // 수정 (Update)
-        db.collection("posts").doc(editingPostData.id).update(postData)
-            .then(() => {
-                elements.writeModal.classList.add('hidden');
-                elements.postForm.reset();
-                showToast(`<i class="fa-solid fa-check"></i> 수정되었습니다.`);
-            })
-            .catch(err => {
-                console.error("수정 실패:", err);
-                alert("수정 중 오류가 발생했습니다.");
-            });
-    } else {
-        // 신규 등록 (Create)
-        sendDiscordNotification(postData).then(msgId => {
-            if (msgId) {
-                postData.discordMessageId = msgId;
-            }
-            
-            db.collection("posts").add(postData)
-                .then(async (docRef) => {
-                    elements.writeModal.classList.add('hidden');
-                    elements.postForm.reset();
-                    showToast(`<i class="fa-solid fa-check"></i> 등록되었습니다.`);
+    try {
+        if (isEditMode && editingPostData) {
+            // 수정 (Update)
+            await db.collection("posts").doc(editingPostData.id).update(postData);
+            elements.writeModal.classList.add('hidden');
+            elements.postForm.reset();
+            showToast(`<i class="fa-solid fa-check"></i> 수정되었습니다.`);
+        } else {
+            // 신규 등록 (Create)
+            const msgId = await sendDiscordNotification(postData);
+            if (msgId) postData.discordMessageId = msgId;
 
-                    // 파티원 구해요/파티 구해요 글 작성 시 +10 (일/주 제한 KST 기준)
-                    if (currentUser?.uid) {
-                        try {
-                            await ensurePointDocsForCurrentUser();
-                            await awardPostCreatePoints(postData.type, docRef?.id);
-                        } catch (e) {
-                            console.error(e);
-                        }
-                    }
-                })
-                .catch((error) => {
-                    console.error("Error adding document: ", error);
-                    alert("등록 중 오류가 발생했습니다.");
-                });
-        });
+            const docRef = await db.collection("posts").add(postData);
+            elements.writeModal.classList.add('hidden');
+            elements.postForm.reset();
+            showToast(`<i class="fa-solid fa-check"></i> 등록되었습니다.`);
+
+            // 파티원 구해요/파티 구해요 글 작성 시 +10 (일/주 제한 KST 기준)
+            if (currentUser?.uid) {
+                try {
+                    await ensurePointDocsForCurrentUser();
+                    await awardPostCreatePoints(postData.type, docRef?.id);
+                } catch (e) {
+                    console.error(e);
+                }
+            }
+        }
+    } catch (err) {
+        console.error(err);
+        alert(isEditMode ? "수정 중 오류가 발생했습니다." : "등록 중 오류가 발생했습니다.");
+    } finally {
+        isSubmittingPost = false;
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = prevSubmitText || '등록하기';
+        }
     }
 }
 
@@ -4081,7 +4099,8 @@ async function saveManagedPostEdits() {
         return;
     }
 
-    if (!canManagePost(post)) {
+    const unlocked = unlockedPostIds.has(post.id);
+    if (!unlocked && !canManagePost(post)) {
         if (!post.password) {
             alert('권한이 없습니다.');
             return;
@@ -4091,6 +4110,7 @@ async function saveManagedPostEdits() {
             alert('비밀번호가 일치하지 않습니다.');
             return;
         }
+        unlockedPostIds.add(post.id);
     }
 
     try {
@@ -4701,11 +4721,13 @@ window.checkPasswordAndManage = function(postId) {
     if (!post) return;
 
     if (currentUser?.isAdmin) {
+        unlockedPostIds.add(postId);
         openManageModal(post);
         return;
     }
 
     if (currentUser && canManagePost(post)) {
+        unlockedPostIds.add(postId);
         openManageModal(post);
         return;
     }
@@ -4713,6 +4735,7 @@ window.checkPasswordAndManage = function(postId) {
     if (post.password) {
         const inputPwd = prompt('게시글 비밀번호를 입력하세요:');
         if (inputPwd === post.password) {
+            unlockedPostIds.add(postId);
             openManageModal(post);
         } else {
             alert('비밀번호가 일치하지 않습니다.');
@@ -4736,7 +4759,8 @@ function updatePostStatus(status) {
     if (!currentEditingPostId) return;
     const post = posts.find(p => p.id === currentEditingPostId);
     if (post) {
-        if (!canManagePost(post)) {
+        const unlocked = unlockedPostIds.has(post.id);
+        if (!unlocked && !canManagePost(post)) {
             if (!post.password) {
                 alert('권한이 없습니다.');
                 return;
@@ -4746,6 +4770,7 @@ function updatePostStatus(status) {
                 alert('비밀번호가 일치하지 않습니다.');
                 return;
             }
+            unlockedPostIds.add(post.id);
         }
         db.collection("posts").doc(post.id).update({
             status: status
@@ -4842,7 +4867,8 @@ function deletePost() {
     if (!currentEditingPostId) return;
     if (confirm('삭제하시겠습니까?')) {
         const post = posts.find(p => p.id === currentEditingPostId);
-        if (post && !canManagePost(post)) {
+        const unlocked = post ? unlockedPostIds.has(post.id) : false;
+        if (post && !unlocked && !canManagePost(post)) {
             if (!post.password) {
                 alert('권한이 없습니다.');
                 return;
@@ -4852,6 +4878,7 @@ function deletePost() {
                 alert('비밀번호가 일치하지 않습니다.');
                 return;
             }
+            unlockedPostIds.add(post.id);
         }
         
         // 하드 삭제 대신 사유 기록(soft delete)
