@@ -247,31 +247,22 @@
                 </div>
 
                 <div class="form-group">
+                    <label>제목 수정</label>
+                    <input type="text" id="managePostTitle" placeholder="제목">
+                </div>
+
+                <div class="form-group">
+                    <label>내용 수정</label>
+                    <textarea id="managePostContent" placeholder="내용"></textarea>
+                </div>
+
+                <button id="managePostSaveBtn" class="btn-outline full-width">수정 저장</button>
+
+                <div class="form-group">
                     <label>상태 변경</label>
                     <div class="manage-btn-group">
                         <button id="btnStatusRecruiting" class="btn-success">모집중</button>
                         <button id="btnStatusFull" class="btn-danger">모집완료</button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>파티원 관리</label>
-                    <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-                        <input type="text" id="newMemberName" placeholder="파티원 닉네임" style="flex: 2;">
-                        <select id="newMemberClass" style="flex: 1.5;">
-                            <option value="검성">검성</option>
-                            <option value="수호성">수호성</option>
-                            <option value="살성">살성</option>
-                            <option value="궁성">궁성</option>
-                            <option value="마도성">마도성</option>
-                            <option value="정령성">정령성</option>
-                            <option value="치유성">치유성</option>
-                            <option value="호법성">호법성</option>
-                        </select>
-                        <button id="addMemberBtn" class="btn-small">추가</button>
-                    </div>
-                    <div id="partyMemberList" class="member-list">
-                        <!-- 멤버 리스트 -->
                     </div>
                 </div>
 
@@ -870,7 +861,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-functions-compat.js"></script>
     
-    <script src="script.min.js?v=20260116-11"></script>
+    <script src="script.min.js?v=20260116-13"></script>
 </body>
 
 </html>

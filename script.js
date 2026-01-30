@@ -2066,6 +2066,9 @@ const elements = {
     manageModal: document.getElementById('manageModal'),
     manageCloseBtn: document.querySelector('.manage-close'),
     managePostInfo: document.getElementById('managePostInfo'),
+    managePostTitle: document.getElementById('managePostTitle'),
+    managePostContent: document.getElementById('managePostContent'),
+    managePostSaveBtn: document.getElementById('managePostSaveBtn'),
     btnStatusRecruiting: document.getElementById('btnStatusRecruiting'),
     btnStatusFull: document.getElementById('btnStatusFull'),
     newMemberName: document.getElementById('newMemberName'),
@@ -2456,6 +2459,7 @@ function setupEventListeners() {
     
     if (elements.addMemberBtn) elements.addMemberBtn.addEventListener('click', addPartyMember);
     if (elements.deletePostBtn) elements.deletePostBtn.addEventListener('click', deletePost);
+    if (elements.managePostSaveBtn) elements.managePostSaveBtn.addEventListener('click', saveManagedPostEdits);
 
     elements.detailCloseBtn.addEventListener('click', () => {
         elements.detailModal.classList.add('hidden');
@@ -3944,9 +3948,7 @@ async function handlePostSubmit(e) {
     }
 }
 
-function sendDiscordNotification(post) {
-    if (!DISCORD_POST_WEBHOOK_URL || DISCORD_POST_WEBHOOK_URL.includes('여기에')) return Promise.resolve(null);
-
+function buildDiscordPayload(post) {
     let typeIcon = '📢';
     let typeText = '파티원 모집';
     
@@ -3984,7 +3986,7 @@ function sendDiscordNotification(post) {
         description += `\n\n🔗 [오픈채팅/디코 바로가기](${post.link})`;
     }
 
-    const payload = {
+    return {
         content: null,
         embeds: [
             {
@@ -3999,7 +4001,11 @@ function sendDiscordNotification(post) {
             }
         ]
     };
+}
 
+function sendDiscordNotification(post) {
+    if (!DISCORD_POST_WEBHOOK_URL || DISCORD_POST_WEBHOOK_URL.includes('여기에')) return Promise.resolve(null);
+    const payload = buildDiscordPayload(post);
     return fetch(`${DISCORD_POST_WEBHOOK_URL}?wait=true`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4034,6 +4040,74 @@ function deleteDiscordMessage(post) {
             `- **error**: ${String(err)}`
         ]);
     });
+}
+
+function updateDiscordMessage(post, newTitle, newContent) {
+    if (!post?.discordMessageId || !DISCORD_POST_WEBHOOK_URL || DISCORD_POST_WEBHOOK_URL.includes('여기에')) return;
+
+    const payload = buildDiscordPayload({ ...post, title: newTitle, content: newContent });
+
+    fetch(`${DISCORD_POST_WEBHOOK_URL}/messages/${post.discordMessageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    }).catch(err => {
+        console.error('Discord Update Error:', err);
+        logAuditEvent("discord_update_error", {
+            postId: post?.id || null,
+            discordMessageId: post?.discordMessageId || null,
+            error: String(err)
+        });
+        sendLogToDiscord([
+            '⚠️ **디스코드 등록 알림 메시지 수정 실패**',
+            '',
+            `- **postId**: ${post?.id || ''}`,
+            `- **discordMessageId**: ${post?.discordMessageId || ''}`,
+            `- **error**: ${String(err)}`
+        ]);
+    });
+}
+
+async function saveManagedPostEdits() {
+    if (!currentEditingPostId) return;
+    const post = posts.find(p => p.id === currentEditingPostId);
+    if (!post) return;
+
+    const newTitle = String(elements.managePostTitle?.value || '').trim();
+    const newContent = String(elements.managePostContent?.value || '').trim();
+
+    if (!newTitle || !newContent) {
+        alert('제목과 내용을 입력해주세요.');
+        return;
+    }
+
+    if (!canManagePost(post)) {
+        if (!post.password) {
+            alert('권한이 없습니다.');
+            return;
+        }
+        const inputPwd = prompt('게시글 비밀번호를 입력하세요:');
+        if (inputPwd !== post.password) {
+            alert('비밀번호가 일치하지 않습니다.');
+            return;
+        }
+    }
+
+    try {
+        await db.collection("posts").doc(post.id).update({
+            title: newTitle,
+            content: newContent
+        });
+
+        if (post.discordMessageId) {
+            updateDiscordMessage(post, newTitle, newContent);
+        }
+
+        showToast(`<i class="fa-solid fa-pen"></i> 수정 내용이 저장되었습니다.`);
+    } catch (e) {
+        console.error(e);
+        alert('수정 저장 중 오류가 발생했습니다.');
+    }
 }
 
 function checkExpiredPosts() {
@@ -4417,8 +4491,9 @@ function renderPosts() {
             ? '<span class="party-status status-full">모집완료</span>' 
             : '<span class="party-status status-recruiting">모집중</span>';
 
-        const dpsDisplay = (post.author.dps > 0) ? `<span class="dps-tag">DPS ${post.author.dps.toLocaleString()}</span>` : '';
-        const itemLevelDisplay = (post.author.itemLevel || 0).toLocaleString();
+        const author = post.author || { name: '작성자', class: '', dps: 0, itemLevel: 0, avatar: null, charKey: null };
+        const dpsDisplay = (author.dps > 0) ? `<span class="dps-tag">DPS ${author.dps.toLocaleString()}</span>` : '';
+        const itemLevelDisplay = (author.itemLevel || 0).toLocaleString();
         
         let categoryHtml = '';
         if (post.category) {
@@ -4468,7 +4543,7 @@ function renderPosts() {
                     ? `<span class="type-badge party"><i class="fa-solid fa-users"></i> 파티원 구해요</span>`
                     : `<span class="type-badge member"><i class="fa-solid fa-user-plus"></i> 파티 구해요</span>`)
                 : '';
-            const authorClassLabel = post.author.class ? `${post.author.class} ` : '';
+            const authorClassLabel = author.class ? `${author.class} ` : '';
 
             card.innerHTML = `
                 <div class="post-header">
@@ -4485,9 +4560,9 @@ function renderPosts() {
                 
                 <div class="post-footer">
                     <div class="author-info">
-                        <img src="${avatarUrlFromCharKeyOrFallback(post.author.charKey, post.author.avatar, post.author.name)}" class="author-avatar" onerror="this.src=defaultAvatarDataUri('U')">
+                        <img src="${avatarUrlFromCharKeyOrFallback(author.charKey, author.avatar, author.name)}" class="author-avatar" onerror="this.src=defaultAvatarDataUri('U')">
                         <div class="author-detail">
-                            <div class="author-name">${post.author.name}</div>
+                            <div class="author-name">${author.name}</div>
                             <div class="author-meta">
                                 ${authorClassLabel}
                                 ${dpsDisplay}
@@ -4533,8 +4608,10 @@ function showPostDetail(postId) {
     const roles = (Array.isArray(post.roles) ? post.roles : []).filter(Boolean);
     elements.detailRoles.innerHTML = post.type === 'notice' ? '' : roles.map(r => `<span class="role-badge">${r}</span>`).join(' ');
     
+    const author = post.author || (post.members && post.members[0]) || { name: '작성자', class: '', itemLevel: 0, avatar: null, charKey: null };
+
     elements.detailTitle.textContent = post.title;
-    elements.detailAuthor.textContent = post.author.name;
+    elements.detailAuthor.textContent = author.name || '작성자';
     elements.detailTime.textContent = new Date(post.createdAt).toLocaleString();
     elements.detailContent.textContent = post.content;
     
@@ -4544,6 +4621,22 @@ function showPostDetail(postId) {
     } else {
         elements.detailLink.classList.add('hidden');
     }
+
+    const authorAvatar = document.getElementById('detailAuthorAvatar');
+    const authorName = document.getElementById('detailAuthorName');
+    const authorClass = document.getElementById('detailAuthorClass');
+    const authorItemLevel = document.getElementById('detailAuthorItemLevel');
+
+    if (authorAvatar) {
+        authorAvatar.src = avatarUrlFromCharKeyOrFallback(author.charKey, author.avatar, author.name);
+        authorAvatar.onerror = () => { authorAvatar.src = defaultAvatarDataUri('U'); };
+    }
+    if (authorName) authorName.textContent = author.name || '작성자';
+    if (authorClass) authorClass.textContent = author.class || '';
+    if (authorItemLevel) authorItemLevel.textContent = (author.itemLevel || 0).toLocaleString();
+
+    const authorProfile = document.getElementById('detailAuthorProfile');
+    if (authorProfile) authorProfile.onclick = () => openAtulPage(author.name);
 }
 
 function renderDetailPartyList(post) {
@@ -4634,6 +4727,8 @@ function openManageModal(post) {
     currentEditingPostId = post.id;
     elements.manageModal.classList.remove('hidden');
     elements.managePostInfo.innerHTML = `<h4>${post.title}</h4>`;
+    if (elements.managePostTitle) elements.managePostTitle.value = post.title || '';
+    if (elements.managePostContent) elements.managePostContent.value = post.content || '';
     renderPartyMembers();
 }
 
@@ -4642,8 +4737,15 @@ function updatePostStatus(status) {
     const post = posts.find(p => p.id === currentEditingPostId);
     if (post) {
         if (!canManagePost(post)) {
-            alert('권한이 없습니다.');
-            return;
+            if (!post.password) {
+                alert('권한이 없습니다.');
+                return;
+            }
+            const inputPwd = prompt('게시글 비밀번호를 입력하세요:');
+            if (inputPwd !== post.password) {
+                alert('비밀번호가 일치하지 않습니다.');
+                return;
+            }
         }
         db.collection("posts").doc(post.id).update({
             status: status
@@ -4717,6 +4819,7 @@ window.deletePartyMember = function(index) {
 function renderPartyMembers() {
     if (!currentEditingPostId) return;
     const post = posts.find(p => p.id === currentEditingPostId);
+    if (!elements.partyMemberList) return;
     elements.partyMemberList.innerHTML = '';
     
     if (!post || !post.members) return;
@@ -4740,8 +4843,15 @@ function deletePost() {
     if (confirm('삭제하시겠습니까?')) {
         const post = posts.find(p => p.id === currentEditingPostId);
         if (post && !canManagePost(post)) {
-            alert('권한이 없습니다.');
-            return;
+            if (!post.password) {
+                alert('권한이 없습니다.');
+                return;
+            }
+            const inputPwd = prompt('게시글 비밀번호를 입력하세요:');
+            if (inputPwd !== post.password) {
+                alert('비밀번호가 일치하지 않습니다.');
+                return;
+            }
         }
         
         // 하드 삭제 대신 사유 기록(soft delete)
@@ -4750,6 +4860,7 @@ function deletePost() {
                 if (post) deleteDiscordMessage(post);
                 if (post) db.collection("posts").doc(post.id).update({ discordMessageId: null }).catch(() => {});
                 elements.manageModal.classList.add('hidden');
+                currentEditingPostId = null;
                 showToast("게시글이 삭제되었습니다.");
                 notifyDeletionToDiscord({ ...(post || {}), id: currentEditingPostId }, 'manual_delete', '작성자/관리자 수동 삭제');
             })
